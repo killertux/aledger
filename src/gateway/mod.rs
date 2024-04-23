@@ -1,0 +1,84 @@
+use anyhow::Result;
+use aws_sdk_dynamodb::{
+    types::{
+        AttributeDefinition, GlobalSecondaryIndex, KeySchemaElement, KeyType, Projection,
+        ProjectionType, ProvisionedThroughput, ScalarAttributeType,
+    },
+    Client,
+};
+
+pub mod ledger_entry_repository;
+
+pub async fn build_database(client: &Client) -> Result<()> {
+    let _ = client.delete_table().table_name("a_ledger").send().await;
+    client
+        .create_table()
+        .table_name("a_ledger")
+        .attribute_definitions(
+            AttributeDefinition::builder()
+                .attribute_name("pk")
+                .attribute_type(ScalarAttributeType::S)
+                .build()?,
+        )
+        .attribute_definitions(
+            AttributeDefinition::builder()
+                .attribute_name("sk")
+                .attribute_type(ScalarAttributeType::S)
+                .build()?,
+        )
+        .attribute_definitions(
+            AttributeDefinition::builder()
+                .attribute_name("created_at")
+                .attribute_type(ScalarAttributeType::S)
+                .build()?,
+        )
+        .key_schema(
+            KeySchemaElement::builder()
+                .key_type(KeyType::Hash)
+                .attribute_name("pk")
+                .build()?,
+        )
+        .key_schema(
+            KeySchemaElement::builder()
+                .key_type(KeyType::Range)
+                .attribute_name("sk")
+                .build()?,
+        )
+        .global_secondary_indexes(
+            GlobalSecondaryIndex::builder()
+                .index_name("a_ledger_created_at")
+                .key_schema(
+                    KeySchemaElement::builder()
+                        .key_type(KeyType::Hash)
+                        .attribute_name("pk")
+                        .build()?,
+                )
+                .key_schema(
+                    KeySchemaElement::builder()
+                        .key_type(KeyType::Range)
+                        .attribute_name("created_at")
+                        .build()?,
+                )
+                .projection(
+                    Projection::builder()
+                        .projection_type(ProjectionType::KeysOnly)
+                        .build(),
+                )
+                .provisioned_throughput(
+                    ProvisionedThroughput::builder()
+                        .read_capacity_units(1)
+                        .write_capacity_units(1)
+                        .build()?,
+                )
+                .build()?,
+        )
+        .provisioned_throughput(
+            ProvisionedThroughput::builder()
+                .read_capacity_units(1)
+                .write_capacity_units(1)
+                .build()?,
+        )
+        .send()
+        .await?;
+    Ok(())
+}
