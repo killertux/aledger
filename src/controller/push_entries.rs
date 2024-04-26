@@ -1,7 +1,7 @@
-use super::{JsonError, LedgerResponse};
+use super::LedgerResponse;
 use crate::{
     domain::{
-        entity::{AccountId, Entry, EntryId, LedgerFieldName},
+        entity::{AccountId, Entry, EntryId, EntryStatus, LedgerFieldName},
         use_case::push_entries_use_case,
     },
     gateway::ledger_entry_repository::DynamoDbLedgerEntryRepository,
@@ -16,7 +16,7 @@ use std::collections::HashMap;
 pub async fn push_entries(
     State(app_state): State<AppState>,
     Json(push_entries): Json<Vec<PushEntryRequest>>,
-) -> Result<Json<PushEntryResponse>, JsonError<'static>> {
+) -> Json<PushEntryResponse> {
     let (applied, non_applied) = push_entries_use_case(
         &DynamoDbLedgerEntryRepository::from(app_state.dynamo_client),
         app_state.random_number_generator,
@@ -34,7 +34,7 @@ pub async fn push_entries(
             })
             .collect(),
     };
-    Ok(Json(response))
+    Json(response)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -64,6 +64,7 @@ impl From<PushEntryRequest> for Entry {
             entry_id: value.entry_id,
             ledger_fields: value.ledger_fields,
             additional_fields: value.additional_fields,
+            status: EntryStatus::Applied,
         }
     }
 }

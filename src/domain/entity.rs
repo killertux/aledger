@@ -1,12 +1,19 @@
 use anyhow::bail;
+use base64::prelude::*;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Display};
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Ord, PartialOrd, Eq, Hash, Clone)]
 pub struct AccountId(Uuid);
+
+impl AccountId {
+    pub fn new(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+}
 
 impl From<AccountId> for String {
     fn from(value: AccountId) -> String {
@@ -14,9 +21,9 @@ impl From<AccountId> for String {
     }
 }
 
-impl ToString for AccountId {
-    fn to_string(&self) -> String {
-        self.0.to_string()
+impl Display for AccountId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.to_string())
     }
 }
 
@@ -91,6 +98,10 @@ impl EntryId {
         }
         Ok(Self(entry_id))
     }
+
+    pub fn new_unchecked(entry_id: String) -> Self {
+        Self(entry_id)
+    }
 }
 
 impl TryFrom<String> for EntryId {
@@ -107,6 +118,26 @@ pub struct Entry {
     pub entry_id: EntryId,
     pub ledger_fields: HashMap<LedgerFieldName, i128>,
     pub additional_fields: Value,
+    pub status: EntryStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub enum EntryStatus {
+    Applied,
+    RevertedBy(EntryId),
+    Reverts(EntryId),
+}
+
+impl From<EntryWithBalance> for Entry {
+    fn from(value: EntryWithBalance) -> Self {
+        Self {
+            account_id: value.account_id,
+            entry_id: value.entry_id,
+            ledger_fields: value.ledger_fields,
+            additional_fields: value.additional_fields,
+            status: value.status,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -116,5 +147,62 @@ pub struct EntryWithBalance {
     pub ledger_balances: HashMap<LedgerBalanceName, i128>,
     pub ledger_fields: HashMap<LedgerFieldName, i128>,
     pub additional_fields: Value,
+    pub status: EntryStatus,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Ord, PartialOrd, Eq, Clone)]
+pub enum Order {
+    Asc,
+    Desc,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Ord, PartialOrd, Eq, Clone)]
+pub struct Cursor {
+    start_date: DateTime<Utc>,
+    end_date: DateTime<Utc>,
+    order: Order,
+    account_id: AccountId,
+}
+
+impl Cursor {
+    pub fn new(
+        start_date: DateTime<Utc>,
+        end_date: DateTime<Utc>,
+        order: Order,
+        account_id: AccountId,
+    ) -> Self {
+        Cursor {
+            start_date,
+            end_date,
+            order,
+            account_id,
+        }
+    }
+    pub fn start_date(&self) -> &DateTime<Utc> {
+        &self.start_date
+    }
+    pub fn end_date(&self) -> &DateTime<Utc> {
+        &self.end_date
+    }
+    pub fn order(&self) -> &Order {
+        &self.order
+    }
+    pub fn account_id(&self) -> &AccountId {
+        &self.account_id
+    }
+
+    pub fn encode(&self) -> anyhow::Result<String> {
+        Ok(BASE64_STANDARD.encode(serde_json::to_string(&self)?))
+    }
+
+    pub fn decode(value: String) -> anyhow::Result<Self> {
+        Ok(serde_json::from_slice(&BASE64_STANDARD.decode(value)?)?)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
+pub struct DeleteEntryRequest {
+    pub account_id: AccountId,
+    pub entry_id: EntryId,
 }

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use aws_sdk_dynamodb as dynamodb;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::Router;
 use dynamodb::Client;
 use rand::rngs::SmallRng;
@@ -34,7 +34,24 @@ async fn main() -> Result<()> {
         .route("/", get(root))
         .nest(
             "/api/v1",
-            Router::new().route("/entries", post(controller::push_entries::push_entries)),
+            Router::new()
+                .route("/balance", post(controller::push_entries::push_entries))
+                .route(
+                    "/balance",
+                    delete(controller::delete_entries::delete_entries),
+                )
+                .route(
+                    "/balance/:account_id",
+                    get(controller::get_balance::get_balance),
+                )
+                .route(
+                    "/balance/:account_id/entry",
+                    get(controller::get_entries::get_entries),
+                )
+                .route(
+                    "/balance/:account_id/entry/:entry_id",
+                    get(controller::get_entry::get_entry),
+                ),
         )
         .with_state(AppState {
             dynamo_client: client,

@@ -5,9 +5,13 @@ use serde_json::Value;
 use std::{borrow::Cow, collections::HashMap};
 
 use crate::domain::entity::{
-    AccountId, EntryId, EntryWithBalance, LedgerBalanceName, LedgerFieldName,
+    AccountId, EntryId, EntryStatus, EntryWithBalance, LedgerBalanceName, LedgerFieldName,
 };
 
+pub mod delete_entries;
+pub mod get_balance;
+pub mod get_entries;
+pub mod get_entry;
 pub mod push_entries;
 
 #[derive(Serialize, Deserialize)]
@@ -17,6 +21,7 @@ pub struct LedgerResponse {
     ledger_balances: HashMap<LedgerBalanceName, i128>,
     ledger_fields: HashMap<LedgerFieldName, i128>,
     additional_fields: Value,
+    status: EntryStatus,
     created_at: DateTime<Utc>,
 }
 
@@ -28,6 +33,7 @@ impl From<EntryWithBalance> for LedgerResponse {
             ledger_balances: value.ledger_balances,
             ledger_fields: value.ledger_fields,
             additional_fields: value.additional_fields,
+            status: value.status,
             created_at: value.created_at,
         }
     }
@@ -44,6 +50,14 @@ impl<'a> JsonError<'a> {
             status_code,
             message: Error { error: message },
         }
+    }
+
+    pub fn not_found(message: Cow<'a, str>) -> Self {
+        Self::new(StatusCode::NOT_FOUND, message)
+    }
+
+    pub fn unprocessable_entity(message: Cow<'a, str>) -> Self {
+        Self::new(StatusCode::UNPROCESSABLE_ENTITY, message)
     }
 
     pub fn internal_server_error() -> Self {
@@ -65,11 +79,9 @@ impl<'a> IntoResponse for JsonError<'a> {
     }
 }
 
-impl<'a, E> From<E> for JsonError<'a>
-where
-    E: std::error::Error,
-{
-    fn from(_: E) -> JsonError<'a> {
+impl<'a> From<anyhow::Error> for JsonError<'a> {
+    fn from(e: anyhow::Error) -> JsonError<'a> {
+        tracing::error!("Internal server error {}", e);
         JsonError::internal_server_error()
     }
 }

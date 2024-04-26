@@ -28,6 +28,12 @@ pub async fn build_database(client: &Client) -> Result<()> {
         )
         .attribute_definitions(
             AttributeDefinition::builder()
+                .attribute_name("account_id_and_date")
+                .attribute_type(ScalarAttributeType::S)
+                .build()?,
+        )
+        .attribute_definitions(
+            AttributeDefinition::builder()
                 .attribute_name("created_at")
                 .attribute_type(ScalarAttributeType::S)
                 .build()?,
@@ -46,11 +52,11 @@ pub async fn build_database(client: &Client) -> Result<()> {
         )
         .global_secondary_indexes(
             GlobalSecondaryIndex::builder()
-                .index_name("a_ledger_created_at")
+                .index_name("a_ledger_created_at_idx")
                 .key_schema(
                     KeySchemaElement::builder()
                         .key_type(KeyType::Hash)
-                        .attribute_name("pk")
+                        .attribute_name("account_id_and_date")
                         .build()?,
                 )
                 .key_schema(
@@ -61,7 +67,7 @@ pub async fn build_database(client: &Client) -> Result<()> {
                 )
                 .projection(
                     Projection::builder()
-                        .projection_type(ProjectionType::KeysOnly)
+                        .projection_type(ProjectionType::All)
                         .build(),
                 )
                 .provisioned_throughput(
