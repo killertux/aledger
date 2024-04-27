@@ -1,16 +1,22 @@
 use anyhow::Result;
 use aws_sdk_dynamodb::{
+    Client,
     types::{
         AttributeDefinition, GlobalSecondaryIndex, KeySchemaElement, KeyType, Projection,
         ProjectionType, ProvisionedThroughput, ScalarAttributeType,
     },
-    Client,
 };
 
 pub mod ledger_entry_repository;
 
-pub async fn build_database(client: &Client) -> Result<()> {
-    let _ = client.delete_table().table_name("a_ledger").send().await;
+pub async fn delete_database(client: &Client) -> Result<()> {
+    let _ = client.delete_table().table_name("a_ledger").send().await?;
+    tracing::info!("a_ledger table dropped!");
+
+    Ok(())
+}
+
+pub async fn create_database(client: &Client) -> Result<()> {
     client
         .create_table()
         .table_name("a_ledger")
@@ -86,5 +92,6 @@ pub async fn build_database(client: &Client) -> Result<()> {
         )
         .send()
         .await?;
+    tracing::info!("a_ledger table created!");
     Ok(())
 }

@@ -1,14 +1,3 @@
-use super::LedgerResponse;
-use crate::{
-    controller::JsonError,
-    domain::{
-        entity::{AccountId, Cursor, Order},
-        gateway::GetBalanceError,
-        use_case::{get_entries_from_cursor_use_case, get_entries_use_case},
-    },
-    gateway::ledger_entry_repository::DynamoDbLedgerEntryRepository,
-    AppState,
-};
 use axum::{
     debug_handler,
     extract::{Path, Query, State},
@@ -16,6 +5,18 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+use crate::{
+    app::AppState,
+    controller::JsonError,
+    domain::{entity::Order, gateway::GetBalanceError},
+    gateway::ledger_entry_repository::DynamoDbLedgerEntryRepository,
+};
+use crate::domain::entity::AccountId;
+use crate::domain::entity::Cursor;
+use crate::domain::use_case::{get_entries_from_cursor_use_case, get_entries_use_case};
+
+use super::LedgerResponse;
 
 #[debug_handler]
 pub async fn get_entries(
@@ -49,8 +50,7 @@ pub async fn get_entries(
         (Some(_), _, _, _) => {
             return Err(JsonError::unprocessable_entity(
                 "You can't provide a cursor and a range of dates or order".into(),
-            )
-            .into())
+            ))
         }
         (None, Some(start_date), Some(end_date), order) => {
             get_entries_use_case(
@@ -66,8 +66,7 @@ pub async fn get_entries(
         (None, _, _, _) => {
             return Err(JsonError::unprocessable_entity(
                 "You need to provide both the `start_date` and the `end_date`".into(),
-            )
-            .into())
+            ))
         }
     };
     match result {

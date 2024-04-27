@@ -1,10 +1,8 @@
-use crate::domain::{
-    entity::{
-        AccountId, Cursor, Entry, EntryId, EntryStatus, EntryWithBalance, LedgerBalanceName,
-        LedgerFieldName, Order,
-    },
-    gateway::{AppendEntriesError, GetBalanceError, LedgerEntryRepository, RevertEntriesError},
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
 };
+
 use anyhow::{anyhow, Result};
 use aws_sdk_dynamodb::{
     operation::transact_write_items::{
@@ -18,12 +16,18 @@ use aws_sdk_dynamodb::{
 };
 use chrono::{DateTime, Days, TimeDelta, Utc};
 use itertools::Itertools;
-use std::{
-    collections::{HashMap, HashSet},
-    str::FromStr,
-};
 use ulid::Ulid;
 use uuid::Uuid;
+
+use crate::domain::entity::AccountId;
+use crate::domain::entity::Cursor;
+use crate::domain::entity::LedgerBalanceName;
+use crate::domain::entity::LedgerFieldName;
+use crate::domain::entity::{Entry, EntryId, EntryStatus, EntryWithBalance};
+use crate::domain::{
+    entity::Order,
+    gateway::{AppendEntriesError, GetBalanceError, LedgerEntryRepository, RevertEntriesError},
+};
 
 pub struct DynamoDbLedgerEntryRepository {
     client: Client,
@@ -38,14 +42,11 @@ impl From<Client> for DynamoDbLedgerEntryRepository {
 impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
     async fn append_entries(
         &self,
-        account_id: &crate::domain::entity::AccountId,
-        entries: &[crate::domain::entity::Entry],
-    ) -> Result<
-        Vec<crate::domain::entity::EntryWithBalance>,
-        crate::domain::gateway::AppendEntriesError,
-    > {
+        account_id: &AccountId,
+        entries: &[Entry],
+    ) -> Result<Vec<EntryWithBalance>, AppendEntriesError> {
         let (transact, entries_with_balance) = self
-            .internal_append_entries(&account_id, &entries, self.client.transact_write_items())
+            .internal_append_entries(account_id, entries, self.client.transact_write_items())
             .await?;
 
         match transact.send().await {
@@ -74,7 +75,7 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
                                         account_id.clone(),
                                     ));
                                 }
-                                if let Some((n_entry_id, _revert_id)) = entry_id.split_once("|") {
+                                if let Some((n_entry_id, _revert_id)) = entry_id.split_once('|') {
                                     entry_id = n_entry_id;
                                 }
                                 entries.push(EntryId::new_unchecked(entry_id.to_owned()))
@@ -125,9 +126,9 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
             .map(
                 |responses| -> Result<HashMap<EntryId, EntryWithBalance>, GetBalanceError> {
                     Ok(responses
-                        .into_iter()
+                        .iter()
                         .map(|item| {
-                            let entry = entry_with_balance_from_item(&item)?;
+                            let entry = entry_with_balance_from_item(item)?;
                             Ok((entry.entry_id.clone(), entry))
                         })
                         .collect::<Result<HashMap<EntryId, EntryWithBalance>, GetBalanceError>>()
@@ -146,7 +147,7 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
             .difference(&found_entries_ids)
             .cloned()
             .collect_vec();
-        if missing_entries.len() > 0 {
+        if !missing_entries.is_empty() {
             return Err(RevertEntriesError::EntriesDoesNotExists(
                 account_id.clone(),
                 missing_entries,
@@ -154,10 +155,10 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
         }
         let (mut transact, new_entries_with_balance) = self
             .internal_append_entries(
-                &account_id,
+                account_id,
                 &entry_with_balances
-                    .iter()
-                    .map(|(_, entry)| entry.clone().into())
+                    .values()
+                    .map(|entry| entry.clone().into())
                     .map(|mut entry: Entry| {
                         let status = EntryStatus::Reverts(entry.entry_id);
                         entry.entry_id = EntryId::new_unchecked(Ulid::new().to_string());
@@ -240,7 +241,7 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
 
     async fn get_balance(
         &self,
-        account_id: &crate::domain::entity::AccountId,
+        account_id: &AccountId,
     ) -> Result<EntryWithBalance, GetBalanceError> {
         let item = self
             .client
@@ -289,8 +290,8 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
             .map_err(anyhow::Error::from)?;
         let entry_with_balances = items
             .items()
-            .into_iter()
-            .map(|item| entry_with_balance_from_item(item))
+            .iter()
+            .map(entry_with_balance_from_item)
             .collect::<Result<Vec<EntryWithBalance>, GetBalanceError>>()?;
         if entry_with_balances.is_empty() {
             return Err(GetBalanceError::NotFound(account_id.clone()));
@@ -300,7 +301,7 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
 
     async fn get_entries(
         &self,
-        account_id: &crate::domain::entity::AccountId,
+        account_id: &AccountId,
         start_date: &DateTime<Utc>,
         end_date: &DateTime<Utc>,
         limit: u8,
@@ -340,7 +341,7 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
                         .build()
                         .map_err(anyhow::Error::from)?,
                 )
-                .filter_expression(format!("sk <> :head"))
+                .filter_expression("sk <> :head")
                 .expression_attribute_values(":head", AttributeValue::S("HEAD".into()))
                 .scan_index_forward(*order == Order::Asc)
                 .send()
@@ -348,9 +349,10 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
                 .map_err(anyhow::Error::from)?;
             let mut entry_with_balances = items
                 .items()
-                .into_iter()
-                .map(|item| entry_with_balance_from_item(item))
-                .collect::<Result<Vec<EntryWithBalance>, GetBalanceError>>()?;
+                .iter()
+                .map(entry_with_balance_from_item)
+                .collect::<Result<Vec<EntryWithBalance>, GetBalanceError>>(
+            )?;
             result.append(&mut entry_with_balances);
 
             if result.len() > limit as usize {
@@ -388,19 +390,17 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
                             .last()
                             .ok_or(anyhow!("Expects at least one entry in the vector"))?
                             .created_at
-                            .clone()
                             + TimeDelta::new(0, 1).ok_or(anyhow!("Time delta should be valid"))?,
-                        end_date.clone(),
+                        *end_date,
                         order.clone(),
                         account_id.clone(),
                     ),
                     Order::Desc => Cursor::new(
-                        start_date.clone(),
+                        *start_date,
                         result
                             .last()
                             .ok_or(anyhow!("Expects at least one entry in the vector"))?
                             .created_at
-                            .clone()
                             - TimeDelta::new(0, 1).ok_or(anyhow!("Time delta should be valid"))?,
                         order.clone(),
                         account_id.clone(),
@@ -417,7 +417,7 @@ impl DynamoDbLedgerEntryRepository {
     async fn internal_append_entries(
         &self,
         account_id: &AccountId,
-        entries: &[crate::domain::entity::Entry],
+        entries: &[Entry],
         mut transact: TransactWriteItemsFluentBuilder,
     ) -> Result<(TransactWriteItemsFluentBuilder, Vec<EntryWithBalance>), AppendEntriesError> {
         let head_balances = self
@@ -640,7 +640,7 @@ fn create_transact_item_for_entry(
             AttributeValue::S(format!(
                 "{}|{}",
                 entry.account_id,
-                entry.created_at.date_naive().to_string()
+                entry.created_at.date_naive()
             )),
         )
         .item(
@@ -671,7 +671,7 @@ fn entry_with_balance_from_item(
         .as_s()
         .map_err(|_| GetBalanceError::ErrorReadingField("entry_id".into()))?
         .as_str();
-    if let Some((n_entry_id, _revert_id)) = entry_id.split_once("|") {
+    if let Some((n_entry_id, _revert_id)) = entry_id.split_once('|') {
         entry_id = n_entry_id;
     }
     Ok(EntryWithBalance {
@@ -690,7 +690,7 @@ fn entry_with_balance_from_item(
             .ok_or(GetBalanceError::MissingField("ledger_balances".into()))?
             .as_m()
             .map_err(|_| GetBalanceError::ErrorReadingField("ledger_balances".into()))?
-            .into_iter()
+            .iter()
             .map(|(k, v)| {
                 Ok((
                     LedgerBalanceName::new(k.clone()).map_err(|_| {
@@ -710,7 +710,7 @@ fn entry_with_balance_from_item(
             .ok_or(GetBalanceError::MissingField("ledger_fields".into()))?
             .as_m()
             .map_err(|_| GetBalanceError::ErrorReadingField("ledger_fields".into()))?
-            .into_iter()
+            .iter()
             .map(|(k, v)| {
                 Ok((
                     LedgerFieldName::new(k.clone())

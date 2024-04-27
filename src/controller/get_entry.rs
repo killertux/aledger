@@ -1,19 +1,18 @@
-use super::LedgerResponse;
-use crate::{
-    controller::JsonError,
-    domain::{
-        entity::{AccountId, EntryId},
-        gateway::GetBalanceError,
-        use_case::get_entry_use_case,
-    },
-    gateway::ledger_entry_repository::DynamoDbLedgerEntryRepository,
-    AppState,
-};
 use axum::{
     debug_handler,
     extract::{Path, State},
     Json,
 };
+
+use crate::{
+    app::AppState, controller::JsonError, domain::gateway::GetBalanceError,
+    gateway::ledger_entry_repository::DynamoDbLedgerEntryRepository,
+};
+use crate::domain::entity::AccountId;
+use crate::domain::entity::EntryId;
+use crate::domain::use_case::get_entry_use_case;
+
+use super::LedgerResponse;
 
 #[debug_handler]
 pub async fn get_entry(
