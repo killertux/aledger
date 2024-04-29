@@ -4,19 +4,17 @@ use axum::{
     Json,
 };
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
+use crate::domain::entity::Cursor;
+use crate::domain::use_case::{get_entries_from_cursor_use_case, get_entries_use_case};
 use crate::{
     app::AppState,
     controller::JsonError,
     domain::{entity::Order, gateway::GetBalanceError},
     gateway::ledger_entry_repository::DynamoDbLedgerEntryRepository,
 };
-use crate::domain::entity::AccountId;
-use crate::domain::entity::Cursor;
-use crate::domain::use_case::{get_entries_from_cursor_use_case, get_entries_use_case};
-
-use super::LedgerResponse;
+use crate::{controller::GetEntriesLedgerResponse, domain::entity::AccountId};
 
 #[debug_handler]
 pub async fn get_entries(
@@ -88,11 +86,4 @@ pub struct GetEntriesParams {
     end_date: Option<DateTime<Utc>>,
     cursor: Option<String>,
     order: Option<Order>,
-}
-
-#[derive(Serialize)]
-pub struct GetEntriesLedgerResponse {
-    entries: Vec<LedgerResponse>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cursor: Option<String>,
 }

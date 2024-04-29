@@ -1,14 +1,14 @@
 use std::{borrow::Cow, collections::HashMap};
 
-use axum::{http::StatusCode, Json, response::IntoResponse};
+use axum::{http::StatusCode, response::IntoResponse, Json};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::domain::entity::{EntryId, EntryStatus, EntryWithBalance};
 use crate::domain::entity::AccountId;
 use crate::domain::entity::LedgerBalanceName;
 use crate::domain::entity::LedgerFieldName;
+use crate::domain::entity::{EntryId, EntryStatus, EntryWithBalance};
 
 pub mod delete_entries;
 pub mod get_balance;
@@ -39,6 +39,13 @@ impl From<EntryWithBalance> for LedgerResponse {
             created_at: value.created_at,
         }
     }
+}
+
+#[derive(Serialize)]
+pub struct GetEntriesLedgerResponse {
+    entries: Vec<LedgerResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cursor: Option<String>,
 }
 
 pub struct JsonError<'a> {

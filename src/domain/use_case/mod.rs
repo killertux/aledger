@@ -1,7 +1,7 @@
 pub use delete_entries::delete_entries_use_case;
 pub use get_balance::get_balance_use_case;
 pub use get_entries::{get_entries_from_cursor_use_case, get_entries_use_case};
-pub use get_entry::get_entry_use_case;
+pub use get_entry::{get_entry_from_cursor_use_case, get_entry_use_case};
 pub use push_entries::push_entries_use_case;
 
 use super::gateway::{AppendEntriesError, RevertEntriesError};

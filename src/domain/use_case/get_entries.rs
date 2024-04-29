@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 
 use crate::domain::entity::AccountId;
@@ -24,13 +25,16 @@ pub async fn get_entries_from_cursor_use_case(
     cursor: Cursor,
     limit: u8,
 ) -> Result<(Vec<EntryWithBalance>, Option<Cursor>), GetBalanceError> {
+    let Cursor::FromEntriesQuery {
+        start_date,
+        end_date,
+        order,
+        account_id,
+    } = cursor
+    else {
+        return Err(GetBalanceError::Other(anyhow!("Invalid cursor")));
+    };
     repository
-        .get_entries(
-            cursor.account_id(),
-            cursor.start_date(),
-            cursor.end_date(),
-            limit,
-            cursor.order(),
-        )
+        .get_entries(&account_id, &start_date, &end_date, limit, &order)
         .await
 }

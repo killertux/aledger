@@ -3,7 +3,7 @@ use std::{
     str::FromStr,
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use aws_sdk_dynamodb::{
     operation::transact_write_items::{
         builders::TransactWriteItemsFluentBuilder, TransactWriteItemsError,
@@ -19,10 +19,10 @@ use itertools::Itertools;
 use ulid::Ulid;
 use uuid::Uuid;
 
-use crate::domain::entity::AccountId;
 use crate::domain::entity::Cursor;
 use crate::domain::entity::LedgerBalanceName;
 use crate::domain::entity::LedgerFieldName;
+use crate::domain::entity::{AccountId, EntryToContinue};
 use crate::domain::entity::{Entry, EntryId, EntryStatus, EntryWithBalance};
 use crate::domain::{
     entity::Order,
@@ -63,22 +63,18 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
                     {
                         let mut entries = Vec::new();
                         for cancellation_reason in err.cancellation_reasons() {
-                            if let Some(entry_id) =
-                                cancellation_reason.item().and_then(|item| item.get("sk"))
+                            if let Some(pk) =
+                                cancellation_reason.item().and_then(|item| item.get("pk"))
                             {
-                                let mut entry_id = entry_id
-                                    .as_s()
-                                    .map_err(|_| anyhow!("Cannot read attribute as string"))?
-                                    .as_str();
-                                if entry_id == "HEAD" {
-                                    return Err(AppendEntriesError::OptimisticLockError(
-                                        account_id.clone(),
-                                    ));
+                                let pk = Pk::try_from(pk.clone())?;
+                                match pk {
+                                    Pk::Balance(account_id) => {
+                                        return Err(AppendEntriesError::OptimisticLockError(
+                                            account_id,
+                                        ))
+                                    }
+                                    Pk::Entry(_, entry_id) => entries.push(entry_id),
                                 }
-                                if let Some((n_entry_id, _revert_id)) = entry_id.split_once('|') {
-                                    entry_id = n_entry_id;
-                                }
-                                entries.push(EntryId::new_unchecked(entry_id.to_owned()))
                             }
                         }
                         return Err(AppendEntriesError::EntriesAlreadyExists(
@@ -101,11 +97,11 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
 
         for entry_id in entries_ids {
             keys_and_attributes_builder = keys_and_attributes_builder.keys(HashMap::from([
-                ("pk".into(), AttributeValue::S(account_id.to_string())),
                 (
-                    "sk".into(),
-                    AttributeValue::S(format!("{}|~", entry_id.to_string())),
+                    "pk".into(),
+                    Pk::Entry(account_id.clone(), entry_id.clone()).into(),
                 ),
+                ("sk".into(), Sk::CurrentEntry.into()),
             ]));
         }
         let items = self
@@ -182,27 +178,22 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
                 .remove(entry_id)
                 .ok_or(anyhow!("We should alway be able to get the old entry here"))?;
             old_entry.status = EntryStatus::RevertedBy(entry.entry_id.clone());
-            old_entry.entry_id = EntryId::new_unchecked(format!(
-                "{}|{}",
-                old_entry.entry_id.to_string(),
-                entry.entry_id.to_string()
-            ));
+            transact = transact.transact_items(create_transact_item_for_entry(&old_entry, false)?);
             transact = transact.transact_items(
                 TransactWriteItem::builder()
                     .delete(
                         Delete::builder()
                             .table_name("a_ledger")
-                            .key("pk", AttributeValue::S(account_id.to_string()))
                             .key(
-                                "sk",
-                                AttributeValue::S(format!("{}|~", entry_id.to_string())),
+                                "pk",
+                                Pk::Entry(account_id.clone(), old_entry.entry_id.clone()).into(),
                             )
+                            .key("sk", Sk::CurrentEntry.into())
                             .build()
                             .map_err(anyhow::Error::from)?,
                     )
                     .build(),
             );
-            transact = transact.transact_items(create_transact_item_for_entry(&old_entry, false)?);
         }
 
         match transact.send().await {
@@ -218,15 +209,13 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
                         .unwrap_or(false)
                     {
                         for cancellation_reason in err.cancellation_reasons() {
-                            if let Some(entry_id) =
-                                cancellation_reason.item().and_then(|item| item.get("sk"))
+                            if let Some(pk) =
+                                cancellation_reason.item().and_then(|item| item.get("pk"))
                             {
-                                let entry_id = entry_id
-                                    .as_s()
-                                    .map_err(|_| anyhow!("Cannot read attribute as string"))?;
-                                if entry_id == "HEAD" {
+                                let pk = Pk::try_from(pk.clone())?;
+                                if let Pk::Balance(account_id) = pk {
                                     return Err(RevertEntriesError::OptimisticLockError(
-                                        account_id.clone(),
+                                        account_id,
                                     ));
                                 }
                             }
@@ -247,8 +236,8 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
             .client
             .get_item()
             .table_name("a_ledger")
-            .key("pk", AttributeValue::S(account_id.to_string()))
-            .key("sk", AttributeValue::S("HEAD".into()))
+            .key("pk", Pk::Balance(account_id.clone()).into())
+            .key("sk", Sk::CurrentEntry.into())
             .send()
             .await
             .map_err(anyhow::Error::from)?;
@@ -262,28 +251,40 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
         &self,
         account_id: &AccountId,
         entry_id: &EntryId,
+        entry_to_continue: EntryToContinue,
+        limit: u8,
     ) -> Result<Vec<EntryWithBalance>, GetBalanceError> {
+        let sk_condition = match &entry_to_continue {
+            EntryToContinue::Start => Condition::builder()
+                .comparison_operator(aws_sdk_dynamodb::types::ComparisonOperator::BeginsWith)
+                .attribute_value_list(AttributeValue::S("|".into()))
+                .build()
+                .map_err(anyhow::Error::from)?,
+            EntryToContinue::CurrentEntry => Condition::builder()
+                .comparison_operator(aws_sdk_dynamodb::types::ComparisonOperator::Lt)
+                .attribute_value_list(AttributeValue::S("|~".into()))
+                .build()
+                .map_err(anyhow::Error::from)?,
+            EntryToContinue::RevertedBy(entry_id) => Condition::builder()
+                .comparison_operator(aws_sdk_dynamodb::types::ComparisonOperator::Lt)
+                .attribute_value_list(Sk::RevertedEntry(entry_id.clone()).into())
+                .build()
+                .map_err(anyhow::Error::from)?,
+        };
         let items = self
             .client
             .query()
-            .limit(100)
+            .limit(limit as i32)
             .table_name("a_ledger")
             .key_conditions(
                 "pk",
                 Condition::builder()
                     .comparison_operator(aws_sdk_dynamodb::types::ComparisonOperator::Eq)
-                    .attribute_value_list(AttributeValue::S(account_id.to_string()))
+                    .attribute_value_list(Pk::Entry(account_id.clone(), entry_id.clone()).into())
                     .build()
                     .map_err(anyhow::Error::from)?,
             )
-            .key_conditions(
-                "sk",
-                Condition::builder()
-                    .comparison_operator(aws_sdk_dynamodb::types::ComparisonOperator::BeginsWith)
-                    .attribute_value_list(AttributeValue::S(entry_id.to_string()))
-                    .build()
-                    .map_err(anyhow::Error::from)?,
-            )
+            .key_conditions("sk", sk_condition)
             .scan_index_forward(false)
             .send()
             .await
@@ -294,7 +295,9 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
             .map(entry_with_balance_from_item)
             .collect::<Result<Vec<EntryWithBalance>, GetBalanceError>>()?;
         if entry_with_balances.is_empty() {
-            return Err(GetBalanceError::NotFound(account_id.clone()));
+            if let EntryToContinue::Start = entry_to_continue {
+                return Err(GetBalanceError::NotFound(account_id.clone()));
+            }
         }
         Ok(entry_with_balances)
     }
@@ -385,26 +388,26 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
                 None
             } else {
                 Some(match order {
-                    Order::Asc => Cursor::new(
-                        result
+                    Order::Asc => Cursor::FromEntriesQuery {
+                        start_date: result
                             .last()
                             .ok_or(anyhow!("Expects at least one entry in the vector"))?
                             .created_at
                             + TimeDelta::new(0, 1).ok_or(anyhow!("Time delta should be valid"))?,
-                        *end_date,
-                        order.clone(),
-                        account_id.clone(),
-                    ),
-                    Order::Desc => Cursor::new(
-                        *start_date,
-                        result
+                        end_date: *end_date,
+                        order: order.clone(),
+                        account_id: account_id.clone(),
+                    },
+                    Order::Desc => Cursor::FromEntriesQuery {
+                        start_date: *start_date,
+                        end_date: result
                             .last()
                             .ok_or(anyhow!("Expects at least one entry in the vector"))?
                             .created_at
                             - TimeDelta::new(0, 1).ok_or(anyhow!("Time delta should be valid"))?,
-                        order.clone(),
-                        account_id.clone(),
-                    ),
+                        order: order.clone(),
+                        account_id: account_id.clone(),
+                    },
                 })
             }
         };
@@ -424,8 +427,8 @@ impl DynamoDbLedgerEntryRepository {
             .client
             .get_item()
             .table_name("a_ledger")
-            .key("pk", AttributeValue::S(account_id.to_string()))
-            .key("sk", AttributeValue::S("HEAD".into()))
+            .key("pk", Pk::Balance(account_id.clone()).into())
+            .key("sk", Sk::CurrentEntry.into())
             .send()
             .await
             .map_err(anyhow::Error::from)?
@@ -512,8 +515,8 @@ impl DynamoDbLedgerEntryRepository {
                         .update(
                             Update::builder()
                                 .table_name("a_ledger")
-                                .key("pk", AttributeValue::S(account_id.to_string()))
-                                .key("sk", AttributeValue::S("HEAD".into()))
+                                .key("pk", Pk::Balance(account_id.clone()).into())
+                                .key("sk", Sk::CurrentEntry.into())
                                 .expression_attribute_values(
                                     ":ledger_balances",
                                     AttributeValue::M(
@@ -598,17 +601,21 @@ fn create_transact_item_for_entry(
     entry: &EntryWithBalance,
     is_head: bool,
 ) -> Result<TransactWriteItem> {
+    let (pk, sk) = match (is_head, &entry.status) {
+        (true, _) => (Pk::Balance(entry.account_id.clone()), Sk::CurrentEntry),
+        (false, EntryStatus::RevertedBy(entry_id)) => (
+            Pk::Entry(entry.account_id.clone(), entry.entry_id.clone()),
+            Sk::RevertedEntry(entry_id.clone()),
+        ),
+        (false, _) => (
+            Pk::Entry(entry.account_id.clone(), entry.entry_id.clone()),
+            Sk::CurrentEntry,
+        ),
+    };
     let mut put_builder = Put::builder()
         .table_name("a_ledger")
-        .item("pk", AttributeValue::S(entry.account_id.to_string()))
-        .item(
-            "sk",
-            AttributeValue::S(if is_head {
-                "HEAD".into()
-            } else {
-                format!("{}|~", entry.entry_id.to_string())
-            }),
-        )
+        .item("pk", pk.into())
+        .item("sk", sk.into())
         .item(
             "ledger_balances",
             AttributeValue::M(
@@ -637,11 +644,15 @@ fn create_transact_item_for_entry(
         )
         .item(
             "account_id_and_date",
-            AttributeValue::S(format!(
-                "{}|{}",
-                entry.account_id,
-                entry.created_at.date_naive()
-            )),
+            if is_head {
+                AttributeValue::S("head".into())
+            } else {
+                AttributeValue::S(format!(
+                    "{}|{}",
+                    entry.account_id,
+                    entry.created_at.date_naive()
+                ))
+            },
         )
         .item(
             "entry_status",
@@ -664,27 +675,28 @@ fn create_transact_item_for_entry(
 fn entry_with_balance_from_item(
     item: &HashMap<String, AttributeValue>,
 ) -> Result<EntryWithBalance, GetBalanceError> {
-    let mut entry_id = item
-        .get("entry_id")
-        .or(item.get("sk"))
-        .ok_or(GetBalanceError::MissingField("entry_id".into()))?
-        .as_s()
-        .map_err(|_| GetBalanceError::ErrorReadingField("entry_id".into()))?
-        .as_str();
-    if let Some((n_entry_id, _revert_id)) = entry_id.split_once('|') {
-        entry_id = n_entry_id;
-    }
-    Ok(EntryWithBalance {
-        account_id: AccountId::new(
-            Uuid::from_str(
-                item.get("pk")
-                    .ok_or(GetBalanceError::MissingField("pk".into()))?
+    let pk = Pk::try_from(
+        item.get("pk")
+            .ok_or(GetBalanceError::MissingField("pk".into()))?
+            .clone(),
+    )?;
+    let (account_id, entry_id) = match pk {
+        Pk::Entry(account_id, entry_id) => (account_id, entry_id),
+        Pk::Balance(account_id) => (
+            account_id,
+            EntryId::new_unchecked(
+                item.get("entry_id")
+                    .ok_or(GetBalanceError::MissingField("entry_id".into()))?
                     .as_s()
-                    .map_err(|_| GetBalanceError::ErrorReadingField("pk".into()))?,
-            )
-            .map_err(|_| GetBalanceError::ErrorReadingField("pk".into()))?,
+                    .map_err(|_| GetBalanceError::ErrorReadingField("entry_id".into()))?
+                    .clone(),
+            ),
         ),
-        entry_id: EntryId::new_unchecked(entry_id.to_owned()),
+    };
+
+    Ok(EntryWithBalance {
+        account_id,
+        entry_id,
         ledger_balances: item
             .get("ledger_balances")
             .ok_or(GetBalanceError::MissingField("ledger_balances".into()))?
@@ -744,4 +756,79 @@ fn entry_with_balance_from_item(
         )
         .map_err(|_| GetBalanceError::ErrorReadingField("created_at".into()))?,
     })
+}
+
+enum Pk {
+    Entry(AccountId, EntryId),
+    Balance(AccountId),
+}
+
+impl From<Pk> for AttributeValue {
+    fn from(value: Pk) -> Self {
+        match value {
+            Pk::Entry(account_id, entry_id) => {
+                AttributeValue::S(format!("ACCOUNT_ID:{}|ENTRY_ID:{}", account_id, entry_id))
+            }
+            Pk::Balance(account_id) => AttributeValue::S(format!("ACCOUNT_ID:{}", account_id)),
+        }
+    }
+}
+
+impl TryFrom<AttributeValue> for Pk {
+    type Error = anyhow::Error;
+
+    fn try_from(value: AttributeValue) -> Result<Self, Self::Error> {
+        let value = value
+            .as_s()
+            .map_err(|_| anyhow!("Expect PK to be a string"))?;
+        if let Some((account, entry)) = value.split_once('|') {
+            let Some(account_id) = account.strip_prefix("ACCOUNT_ID:") else {
+                bail!("Expected ACCOUNT_ID: prefix")
+            };
+            let Some(entry_id) = entry.strip_prefix("ENTRY_ID:") else {
+                bail!("Expected ENTRY_ID: prefix")
+            };
+            return Ok(Pk::Entry(
+                AccountId::new(Uuid::from_str(account_id)?),
+                EntryId::new_unchecked(entry_id.into()),
+            ));
+        }
+        let Some(account_id) = value.strip_prefix("ACCOUNT_ID:") else {
+            bail!("Expected ACCOUNT_ID: prefix")
+        };
+        Ok(Pk::Balance(AccountId::new(Uuid::from_str(account_id)?)))
+    }
+}
+
+enum Sk {
+    CurrentEntry,
+    RevertedEntry(EntryId),
+}
+
+impl From<Sk> for AttributeValue {
+    fn from(value: Sk) -> Self {
+        match value {
+            Sk::CurrentEntry => AttributeValue::S("|~".into()),
+            Sk::RevertedEntry(entry_id) => {
+                AttributeValue::S(format!("|REVERT_ENTRY_ID:{}", entry_id))
+            }
+        }
+    }
+}
+
+impl TryFrom<AttributeValue> for Sk {
+    type Error = anyhow::Error;
+
+    fn try_from(value: AttributeValue) -> Result<Self, Self::Error> {
+        let value = value
+            .as_s()
+            .map_err(|_| anyhow!("Expect PK to be a string"))?;
+        if value == "|~" {
+            return Ok(Sk::CurrentEntry);
+        }
+        let Some(entry_id) = value.strip_prefix("|REVERT_ENTRY_ID:") else {
+            bail!("Expected REVERT_ENTRY_ID: prefix")
+        };
+        Ok(Sk::RevertedEntry(EntryId::new_unchecked(entry_id.into())))
+    }
 }

@@ -1,10 +1,11 @@
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
-use crate::domain::entity::{Entry, EntryId, EntryWithBalance};
 use crate::domain::entity::AccountId;
 use crate::domain::entity::Cursor;
+use crate::domain::entity::{Entry, EntryId, EntryWithBalance};
 
+use super::entity::EntryToContinue;
 use super::entity::Order;
 
 pub trait LedgerEntryRepository {
@@ -29,6 +30,8 @@ pub trait LedgerEntryRepository {
         &self,
         account_id: &AccountId,
         entry_id: &EntryId,
+        entry_to_continue: EntryToContinue,
+        limit: u8,
     ) -> Result<Vec<EntryWithBalance>, GetBalanceError>;
 
     async fn get_entries(
