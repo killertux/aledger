@@ -30,6 +30,7 @@ dependencies = [
  "clap",
  "dotenv",
  "itertools",
+ "lazy_static",
  "rand",
  "serde",
  "serde_json",

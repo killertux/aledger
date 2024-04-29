@@ -61,3 +61,18 @@ pub async fn push_entries_use_case(
 
     (applied_entries_with_balance, non_applied_entries)
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::domain::use_case::test::{get_repository, get_rng};
+    use anyhow::Result;
+
+    #[tokio::test]
+    async fn push_single_entry() -> Result<()> {
+        let repository = get_repository().await;
+        let rng = get_rng().await;
+        // push_entries_use_case(&repository, &rng, [Entry{}])
+        Ok(())
+    }
+}
