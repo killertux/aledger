@@ -28,6 +28,7 @@ where
     result
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NonAppliedReason {
     OptimisticLockFailed,
     EntriesAlreadyExists,
@@ -77,12 +78,22 @@ impl NonAppliedReason {
 
 #[cfg(test)]
 pub mod test {
+    use std::collections::HashMap;
+
     use aws_sdk_dynamodb::Client;
+    use fake::{Fake, Faker};
     use lazy_static::lazy_static;
     use rand::SeedableRng;
     use rand::{rngs::SmallRng, Rng};
+    use serde_json::Value::Null;
     use tokio::sync::Mutex;
+    use uuid::Uuid;
 
+    use crate::domain::entity::{
+        AccountId, Entry, EntryId, EntryStatus, EntryWithBalance, LedgerBalanceName,
+        LedgerFieldName,
+    };
+    use crate::utils::utc_now;
     use crate::{
         domain::gateway::LedgerEntryRepository,
         gateway::ledger_entry_repository::DynamoDbLedgerEntryRepository,
@@ -120,5 +131,72 @@ pub mod test {
 
     pub async fn get_repository() -> impl LedgerEntryRepository {
         DynamoDbLedgerEntryRepository::from(set_up_dynamo_db_for_test().await)
+    }
+
+    pub struct EntryBuilder {
+        entry: Entry,
+    }
+
+    impl EntryBuilder {
+        pub fn new() -> Self {
+            Self {
+                entry: Entry {
+                    account_id: AccountId::new(Faker.fake()),
+                    entry_id: EntryId::new_unchecked(Faker.fake::<Uuid>().to_string()),
+                    ledger_fields: HashMap::new(),
+                    additional_fields: Null,
+                    status: EntryStatus::Applied,
+                },
+            }
+        }
+
+        pub fn with_account_id(mut self, account_id: AccountId) -> Self {
+            self.entry.account_id = account_id;
+            self
+        }
+
+        pub fn with_ledger_field(mut self, key: impl Into<String>, value: i128) -> Self {
+            self.entry.ledger_fields.insert(
+                LedgerFieldName::new(key.into()).expect("Error with ledger field name"),
+                value,
+            );
+            self
+        }
+
+        pub fn build(self) -> Entry {
+            self.entry
+        }
+    }
+
+    pub struct EntryWithBalanceBuilder {
+        entry: EntryWithBalance,
+    }
+
+    impl EntryWithBalanceBuilder {
+        pub fn from_entry(entry: Entry) -> Self {
+            Self {
+                entry: EntryWithBalance {
+                    account_id: entry.account_id,
+                    entry_id: entry.entry_id,
+                    ledger_fields: entry.ledger_fields,
+                    additional_fields: entry.additional_fields,
+                    ledger_balances: HashMap::new(),
+                    status: entry.status,
+                    created_at: utc_now(),
+                },
+            }
+        }
+
+        pub fn with_ledger_balance(mut self, key: impl Into<String>, value: i128) -> Self {
+            self.entry.ledger_balances.insert(
+                LedgerBalanceName::new(key.into()).expect("Error with ledger field name"),
+                value,
+            );
+            self
+        }
+
+        pub fn build(self) -> EntryWithBalance {
+            self.entry
+        }
     }
 }

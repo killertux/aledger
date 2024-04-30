@@ -14,6 +14,7 @@ mod app;
 mod controller;
 mod domain;
 mod gateway;
+mod utils;
 
 #[derive(Debug, Parser)]
 #[command(version, about)]

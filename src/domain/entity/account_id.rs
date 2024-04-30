@@ -1,9 +1,9 @@
-use std::fmt::Display;
-
 use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Ord, PartialOrd, Eq, Hash, Clone)]
+#[cfg_attr(test, derive(fake::Dummy))]
 pub struct AccountId(Uuid);
 
 impl AccountId {

@@ -19,7 +19,6 @@ use itertools::Itertools;
 use ulid::Ulid;
 use uuid::Uuid;
 
-use crate::domain::entity::Cursor;
 use crate::domain::entity::LedgerBalanceName;
 use crate::domain::entity::LedgerFieldName;
 use crate::domain::entity::{AccountId, EntryToContinue};
@@ -28,6 +27,7 @@ use crate::domain::{
     entity::Order,
     gateway::{AppendEntriesError, GetBalanceError, LedgerEntryRepository, RevertEntriesError},
 };
+use crate::{domain::entity::Cursor, utils::utc_now};
 
 pub struct DynamoDbLedgerEntryRepository {
     client: Client,
@@ -475,7 +475,7 @@ impl DynamoDbLedgerEntryRepository {
                     status: entry.status.clone(),
                     ledger_fields: entry.ledger_fields.clone(),
                     additional_fields: entry.additional_fields.clone(),
-                    created_at: Utc::now(),
+                    created_at: utc_now(),
                 },
                 None => EntryWithBalance {
                     account_id: entry.account_id.clone(),
@@ -496,7 +496,7 @@ impl DynamoDbLedgerEntryRepository {
                     status: entry.status.clone(),
                     ledger_fields: entry.ledger_fields.clone(),
                     additional_fields: entry.additional_fields.clone(),
-                    created_at: Utc::now(),
+                    created_at: utc_now(),
                 },
             };
             entries_with_balance.push(new_entry);

@@ -33,4 +33,7 @@ dotenv = "0.15.0"
 clap = { version = "4.5.4", features = ["derive"] }
 
 [dev-dependencies]
+assertables = "7.0.1"
+fake = { version = "2.9.2", features = ["uuid", "serde_json", "derive"] }
 lazy_static = "1.4.0"
+tokio-shared-rt = "0.1.0"
