@@ -832,3 +832,89 @@ impl TryFrom<AttributeValue> for Sk {
         Ok(Sk::RevertedEntry(EntryId::new_unchecked(entry_id.into())))
     }
 }
+
+#[cfg(test)]
+pub mod test {
+    use tokio::sync::Mutex;
+
+    use super::*;
+    pub struct LedgerEntryRepositoryForTests {
+        internal_state: Mutex<InternalState>,
+    }
+
+    struct InternalState {
+        append_entries_call_count: u32,
+        append_entries_response: Vec<Result<Vec<EntryWithBalance>, AppendEntriesError>>,
+    }
+
+    impl LedgerEntryRepositoryForTests {
+        pub fn new() -> Self {
+            Self {
+                internal_state: Mutex::new(InternalState {
+                    append_entries_call_count: 0,
+                    append_entries_response: Vec::new(),
+                }),
+            }
+        }
+
+        pub async fn push_append_entries_response(
+            &self,
+            response: Result<Vec<EntryWithBalance>, AppendEntriesError>,
+        ) {
+            let mut internal_state = self.internal_state.lock().await;
+            internal_state.append_entries_response.push(response)
+        }
+
+        pub async fn get_append_entries_call_count(&self) -> u32 {
+            self.internal_state.lock().await.append_entries_call_count
+        }
+    }
+
+    impl LedgerEntryRepository for LedgerEntryRepositoryForTests {
+        async fn append_entries(
+            &self,
+            _account_id: &AccountId,
+            _entries: &[Entry],
+        ) -> Result<Vec<EntryWithBalance>, AppendEntriesError> {
+            let mut internal_state = self.internal_state.lock().await;
+            internal_state.append_entries_call_count += 1;
+            internal_state.append_entries_response.remove(0)
+        }
+
+        async fn revert_entries(
+            &self,
+            _account_id: &AccountId,
+            _entries: &[EntryId],
+        ) -> Result<Vec<EntryWithBalance>, RevertEntriesError> {
+            todo!()
+        }
+
+        async fn get_balance(
+            &self,
+            _account_id: &AccountId,
+        ) -> Result<EntryWithBalance, GetBalanceError> {
+            todo!()
+        }
+
+        async fn get_entry(
+            &self,
+            _account_id: &AccountId,
+            _entry_id: &EntryId,
+            _entry_to_continue: EntryToContinue,
+            _limit: u8,
+        ) -> Result<Vec<EntryWithBalance>, GetBalanceError> {
+            todo!()
+        }
+
+        async fn get_entries(
+            &self,
+            _account_id: &AccountId,
+            _start_date: &DateTime<Utc>,
+            _end_date: &DateTime<Utc>,
+            _limit: u8,
+            _order: &Order,
+        ) -> Result<(Vec<EntryWithBalance>, Option<Cursor>), GetBalanceError> {
+            todo!()
+        }
+    }
+}

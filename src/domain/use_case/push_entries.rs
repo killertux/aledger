@@ -65,9 +65,12 @@ pub async fn push_entries_use_case(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::domain::{
-        entity::AccountId,
-        use_case::test::{get_repository, get_rng, EntryBuilder, EntryWithBalanceBuilder},
+    use crate::{
+        domain::{
+            entity::AccountId,
+            use_case::test::{get_repository, get_rng, EntryBuilder, EntryWithBalanceBuilder},
+        },
+        gateway::ledger_entry_repository::test::LedgerEntryRepositoryForTests,
     };
     use anyhow::Result;
     use assertables::*;
@@ -260,19 +263,27 @@ mod test {
             .with_ledger_field("local_amount", -50)
             .with_ledger_field("usd_amount", -152)
             .build();
+        let entry_3 = EntryBuilder::new()
+            .with_account_id(account_id.clone())
+            .with_ledger_field("local_amount", -50)
+            .with_ledger_field("usd_amount", -152)
+            .build();
         let (applied_1, non_applied_1) = push_entries_use_case(
             &repository,
             get_rng().await,
             [entry_1.clone(), entry_2.clone()].into_iter(),
         )
         .await;
-        let (applied_2, non_applied_2) =
-            push_entries_use_case(&repository, get_rng().await, [entry_2.clone()].into_iter())
-                .await;
+        let (applied_2, non_applied_2) = push_entries_use_case(
+            &repository,
+            get_rng().await,
+            [entry_1.clone(), entry_2.clone(), entry_3.clone()].into_iter(),
+        )
+        .await;
         assert!(non_applied_1.is_empty());
         assert_eq!(
             Vec::from([
-                EntryWithBalanceBuilder::from_entry(entry_1)
+                EntryWithBalanceBuilder::from_entry(entry_1.clone())
                     .with_ledger_balance("balance_local_amount", 100)
                     .with_ledger_balance("balance_usd_amount", 301)
                     .build(),
@@ -283,12 +294,67 @@ mod test {
             ]),
             applied_1
         );
-        assert!(applied_2.is_empty());
         assert_eq!(
-            Vec::from([(NonAppliedReason::EntriesAlreadyExists, entry_2)]),
+            Vec::from([EntryWithBalanceBuilder::from_entry(entry_3)
+                .with_ledger_balance("balance_local_amount", 0)
+                .with_ledger_balance("balance_usd_amount", -3)
+                .build()]),
+            applied_2
+        );
+        assert_eq!(
+            Vec::from([
+                (NonAppliedReason::EntriesAlreadyExists, entry_1),
+                (NonAppliedReason::EntriesAlreadyExists, entry_2)
+            ]),
             non_applied_2
         );
 
+        Ok(())
+    }
+
+    #[tokio_shared_rt::test(shared)]
+    async fn optimistic_lock_error_should_retry() -> Result<()> {
+        let account_id: AccountId = Faker.fake();
+        let repository = LedgerEntryRepositoryForTests::new();
+        repository
+            .push_append_entries_response(Err(AppendEntriesError::OptimisticLockError(
+                account_id.clone(),
+            )))
+            .await;
+        repository
+            .push_append_entries_response(Err(AppendEntriesError::OptimisticLockError(
+                account_id.clone(),
+            )))
+            .await;
+        repository
+            .push_append_entries_response(Err(AppendEntriesError::OptimisticLockError(
+                account_id.clone(),
+            )))
+            .await;
+        repository
+            .push_append_entries_response(Err(AppendEntriesError::OptimisticLockError(
+                account_id.clone(),
+            )))
+            .await;
+        repository
+            .push_append_entries_response(Err(AppendEntriesError::OptimisticLockError(
+                account_id.clone(),
+            )))
+            .await;
+        let entry_1 = EntryBuilder::new()
+            .with_account_id(account_id.clone())
+            .with_ledger_field("local_amount", 100)
+            .with_ledger_field("usd_amount", 301)
+            .build();
+        let (applied, non_applied) =
+            push_entries_use_case(&repository, get_rng().await, [entry_1.clone()].into_iter())
+                .await;
+        assert!(applied.is_empty());
+        assert_eq!(
+            Vec::from([(NonAppliedReason::OptimisticLockFailed, entry_1),]),
+            non_applied
+        );
+        assert_eq!(5, repository.get_append_entries_call_count().await);
         Ok(())
     }
 }
