@@ -1,5 +1,5 @@
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +13,7 @@ pub enum Cursor {
         account_id: AccountId,
         start_date: DateTime<Utc>,
         end_date: DateTime<Utc>,
+        sequence: u128,
         order: Order,
     },
     FromEntryQuery {
@@ -44,6 +45,7 @@ impl Cursor {
                 start_date: _,
                 end_date: _,
                 order: _,
+                sequence: _,
                 account_id,
             } => account_id,
             Self::FromEntryQuery {

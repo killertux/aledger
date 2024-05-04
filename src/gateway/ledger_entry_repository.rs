@@ -5,6 +5,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Result};
 use aws_sdk_dynamodb::{
+    Client,
     operation::transact_write_items::{
         builders::TransactWriteItemsFluentBuilder, TransactWriteItemsError,
     },
@@ -12,22 +13,21 @@ use aws_sdk_dynamodb::{
         AttributeValue, Condition, Delete, KeysAndAttributes, Put,
         ReturnValuesOnConditionCheckFailure, TransactWriteItem, Update,
     },
-    Client,
 };
-use chrono::{DateTime, Days, TimeDelta, Utc};
+use aws_sdk_dynamodb::types::ComparisonOperator;
+use chrono::{DateTime, Days, Utc};
 use itertools::Itertools;
 use ulid::Ulid;
 use uuid::Uuid;
 
-use crate::domain::entity::LedgerBalanceName;
-use crate::domain::entity::LedgerFieldName;
-use crate::domain::entity::{AccountId, EntryToContinue};
-use crate::domain::entity::{Entry, EntryId, EntryStatus, EntryWithBalance};
+use crate::{domain::entity::Cursor, utils::utc_now};
 use crate::domain::{
-    entity::Order,
+    entity::{
+        AccountId, Entry, EntryId, EntryStatus, EntryToContinue, EntryWithBalance,
+        LedgerBalanceName, LedgerFieldName, Order,
+    },
     gateway::{AppendEntriesError, GetBalanceError, LedgerEntryRepository, RevertEntriesError},
 };
-use crate::{domain::entity::Cursor, utils::utc_now};
 
 pub struct DynamoDbLedgerEntryRepository {
     client: Client,
@@ -256,17 +256,17 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
     ) -> Result<Vec<EntryWithBalance>, GetBalanceError> {
         let sk_condition = match &entry_to_continue {
             EntryToContinue::Start => Condition::builder()
-                .comparison_operator(aws_sdk_dynamodb::types::ComparisonOperator::BeginsWith)
+                .comparison_operator(ComparisonOperator::BeginsWith)
                 .attribute_value_list(AttributeValue::S("|".into()))
                 .build()
                 .map_err(anyhow::Error::from)?,
             EntryToContinue::CurrentEntry => Condition::builder()
-                .comparison_operator(aws_sdk_dynamodb::types::ComparisonOperator::Lt)
+                .comparison_operator(ComparisonOperator::Lt)
                 .attribute_value_list(AttributeValue::S("|~".into()))
                 .build()
                 .map_err(anyhow::Error::from)?,
             EntryToContinue::RevertedBy(entry_id) => Condition::builder()
-                .comparison_operator(aws_sdk_dynamodb::types::ComparisonOperator::Lt)
+                .comparison_operator(ComparisonOperator::Lt)
                 .attribute_value_list(Sk::RevertedEntry(entry_id.clone()).into())
                 .build()
                 .map_err(anyhow::Error::from)?,
@@ -279,7 +279,7 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
             .key_conditions(
                 "pk",
                 Condition::builder()
-                    .comparison_operator(aws_sdk_dynamodb::types::ComparisonOperator::Eq)
+                    .comparison_operator(ComparisonOperator::Eq)
                     .attribute_value_list(Pk::Entry(account_id.clone(), entry_id.clone()).into())
                     .build()
                     .map_err(anyhow::Error::from)?,
@@ -309,6 +309,7 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
         end_date: &DateTime<Utc>,
         limit: u8,
         order: &Order,
+        sequence: Option<u128>,
     ) -> Result<(Vec<EntryWithBalance>, Option<Cursor>), GetBalanceError> {
         let start_naive_date = start_date.date_naive();
         let end_naive_date = end_date.date_naive();
@@ -318,7 +319,7 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
         };
         let mut result = Vec::new();
         loop {
-            let items = self
+            let query_builder = self
                 .client
                 .query()
                 .limit((limit as usize - result.len()) as i32 + 1)
@@ -327,18 +328,71 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
                 .key_conditions(
                     "account_id_and_date",
                     Condition::builder()
-                        .comparison_operator(aws_sdk_dynamodb::types::ComparisonOperator::Eq)
+                        .comparison_operator(ComparisonOperator::Eq)
                         .attribute_value_list(AttributeValue::S(format!(
                             "{}|{}",
                             account_id, current_date
                         )))
                         .build()
                         .map_err(anyhow::Error::from)?,
-                )
+                );
+            let query_builder = match order {
+                Order::Asc => query_builder
+                    .key_conditions(
+                        "created_at",
+                        Condition::builder()
+                            .comparison_operator(ComparisonOperator::Gt)
+                            .attribute_value_list(AttributeValue::S(
+                                if let Some(sequence) = sequence {
+                                    format!("{}|{}", start_date.to_string(), sequence)
+                                } else {
+                                    start_date.to_string()
+                                },
+                            ))
+                            .build()
+                            .map_err(anyhow::Error::from)?,
+                    )
+                    .key_conditions(
+                        "created_at",
+                        Condition::builder()
+                            .comparison_operator(ComparisonOperator::Lt)
+                            .attribute_value_list(AttributeValue::S(format!(
+                                "{}|{}",
+                                end_date.to_string(),
+                                u128::MAX
+                            )))
+                            .build()
+                            .map_err(anyhow::Error::from)?,
+                    ),
+                Order::Desc => query_builder
+                    .key_conditions(
+                        "created_at",
+                        Condition::builder()
+                            .comparison_operator(ComparisonOperator::Gt)
+                            .attribute_value_list(AttributeValue::S(start_date.to_string()))
+                            .build()
+                            .map_err(anyhow::Error::from)?,
+                    )
+                    .key_conditions(
+                        "created_at",
+                        Condition::builder()
+                            .comparison_operator(ComparisonOperator::Lt)
+                            .attribute_value_list(AttributeValue::S(
+                                if let Some(sequence) = sequence {
+                                    format!("{}|{}", start_date.to_string(), sequence)
+                                } else {
+                                    start_date.to_string()
+                                },
+                            ))
+                            .build()
+                            .map_err(anyhow::Error::from)?,
+                    ),
+            };
+            let items = query_builder
                 .key_conditions(
                     "created_at",
                     Condition::builder()
-                        .comparison_operator(aws_sdk_dynamodb::types::ComparisonOperator::Between)
+                        .comparison_operator(ComparisonOperator::Between)
                         .attribute_value_list(AttributeValue::S(start_date.to_string()))
                         .attribute_value_list(AttributeValue::S(end_date.to_string()))
                         .build()
@@ -387,26 +441,23 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
             if result.len() < limit as usize {
                 None
             } else {
+                let last = result
+                    .last()
+                    .ok_or(anyhow!("Expects at least one entry in the vector"))?;
                 Some(match order {
                     Order::Asc => Cursor::FromEntriesQuery {
-                        start_date: result
-                            .last()
-                            .ok_or(anyhow!("Expects at least one entry in the vector"))?
-                            .created_at
-                            + TimeDelta::new(0, 1).ok_or(anyhow!("Time delta should be valid"))?,
+                        start_date: last.created_at,
                         end_date: *end_date,
                         order: order.clone(),
                         account_id: account_id.clone(),
+                        sequence: last.sequence,
                     },
                     Order::Desc => Cursor::FromEntriesQuery {
                         start_date: *start_date,
-                        end_date: result
-                            .last()
-                            .ok_or(anyhow!("Expects at least one entry in the vector"))?
-                            .created_at
-                            - TimeDelta::new(0, 1).ok_or(anyhow!("Time delta should be valid"))?,
+                        end_date: last.created_at,
                         order: order.clone(),
                         account_id: account_id.clone(),
+                        sequence: last.sequence,
                     },
                 })
             }
@@ -433,24 +484,35 @@ impl DynamoDbLedgerEntryRepository {
             .await
             .map_err(anyhow::Error::from)?
             .item()
-            .map(|item| -> Result<HashMap<LedgerBalanceName, i128>> {
-                item.get("ledger_balances")
-                    .ok_or(anyhow!(
-                        "Missing ledger_balances for HEAD of account_id {}",
-                        account_id.to_string()
-                    ))?
-                    .as_m()
-                    .map_err(|_| anyhow!("Not a map"))?
-                    .iter()
-                    .map(|(k, v)| -> Result<(LedgerBalanceName, i128)> {
-                        Ok((
-                            LedgerBalanceName::new(k.clone())?,
-                            v.as_n()
-                                .map_err(|_| anyhow!("Not a number"))?
-                                .parse::<i128>()?,
-                        ))
-                    })
-                    .collect::<Result<HashMap<LedgerBalanceName, i128>>>()
+            .map(|item| -> Result<(HashMap<LedgerBalanceName, i128>, u128)> {
+                Ok((
+                    item.get("ledger_balances")
+                        .ok_or(anyhow!(
+                            "Missing ledger_balances for HEAD of account_id {}",
+                            account_id.to_string()
+                        ))?
+                        .as_m()
+                        .map_err(|_| anyhow!("Not a map"))?
+                        .iter()
+                        .map(|(k, v)| -> Result<(LedgerBalanceName, i128)> {
+                            Ok((
+                                LedgerBalanceName::new(k.clone())?,
+                                v.as_n()
+                                    .map_err(|_| anyhow!("Not a number"))?
+                                    .parse::<i128>()?,
+                            ))
+                        })
+                        .collect::<Result<HashMap<LedgerBalanceName, i128>>>()?,
+                    item.get("sequence")
+                        .ok_or(anyhow!(
+                            "Missing sequence for HEAD of account_id {}",
+                            account_id.to_string()
+                        ))?
+                        .as_n()
+                        .map_err(|_| anyhow!("Not a number"))?
+                        .parse()
+                        .map_err(|err| anyhow!("Error parsing sequence number: {err}"))?,
+                ))
             })
             .transpose()?;
         let mut entries_with_balance: Vec<EntryWithBalance> = Vec::new();
@@ -475,6 +537,7 @@ impl DynamoDbLedgerEntryRepository {
                     status: entry.status.clone(),
                     ledger_fields: entry.ledger_fields.clone(),
                     additional_fields: entry.additional_fields.clone(),
+                    sequence: entry_with_balance.sequence + 1,
                     created_at: utc_now(),
                 },
                 None => EntryWithBalance {
@@ -487,7 +550,9 @@ impl DynamoDbLedgerEntryRepository {
                             let ledger_balance_name = LedgerBalanceName::from(field_name.clone());
                             let balance = head_balances
                                 .as_ref()
-                                .and_then(|balances| balances.get(&ledger_balance_name).cloned())
+                                .and_then(|(balances, _)| {
+                                    balances.get(&ledger_balance_name).cloned()
+                                })
                                 .unwrap_or(0);
                             let new_balance = balance + value;
                             (ledger_balance_name, new_balance)
@@ -496,6 +561,10 @@ impl DynamoDbLedgerEntryRepository {
                     status: entry.status.clone(),
                     ledger_fields: entry.ledger_fields.clone(),
                     additional_fields: entry.additional_fields.clone(),
+                    sequence: head_balances
+                        .as_ref()
+                        .map(|(_, sequence)| sequence + 1)
+                        .unwrap_or(0),
                     created_at: utc_now(),
                 },
             };
@@ -505,7 +574,7 @@ impl DynamoDbLedgerEntryRepository {
             transact = transact.transact_items(create_transact_item_for_entry(entry, false)?);
         }
         match head_balances {
-            Some(balance) => {
+            Some((balance, last_sequence)) => {
                 let entry = entries_with_balance.last().ok_or(anyhow!(
                     "Missing last entry for account_id {}",
                     account_id.to_string()
@@ -558,6 +627,12 @@ impl DynamoDbLedgerEntryRepository {
                                     ),
                                 )
                                 .expression_attribute_values(
+                                    ":sequence",
+                                    AttributeValue::N(
+                                        entry.sequence.to_string(),
+                                    ),
+                                )
+                                .expression_attribute_values(
                                     ":created_at",
                                     AttributeValue::S(
                                         entry.created_at.to_string(),
@@ -572,8 +647,15 @@ impl DynamoDbLedgerEntryRepository {
                                             .collect(),
                                     ),
                                 )
-                                .update_expression("SET ledger_balances = :ledger_balances, ledger_fields = :ledger_fields, additional_fields = :additional_fields, entry_id = :entry_id, created_at = :created_at, entry_status = :status")
-                                .condition_expression("ledger_balances = :old_ledger_balances")
+                                .expression_attribute_values(
+                                    ":old_sequence",
+                                    AttributeValue::N(
+                                        last_sequence.to_string(),
+                                    ),
+                                )
+                                .expression_attribute_names("#sequence_field", "sequence")
+                                .update_expression("SET ledger_balances = :ledger_balances, ledger_fields = :ledger_fields, additional_fields = :additional_fields, entry_id = :entry_id, created_at = :created_at, entry_status = :status, #sequence_field = :sequence")
+                                .condition_expression("ledger_balances = :old_ledger_balances AND #sequence_field = :old_sequence")
                                 .return_values_on_condition_check_failure(
                                     ReturnValuesOnConditionCheckFailure::AllOld,
                                 )
@@ -658,9 +740,14 @@ fn create_transact_item_for_entry(
             "entry_status",
             AttributeValue::S(serde_json::to_string(&entry.status)?),
         )
+        .item("sequence", AttributeValue::N(entry.sequence.to_string()))
         .item(
             "created_at",
-            AttributeValue::S(entry.created_at.to_string()),
+            AttributeValue::S(format!(
+                "{}|{}",
+                entry.created_at.to_string(),
+                entry.sequence
+            )),
         )
         .condition_expression("attribute_not_exists(pk)")
         .return_values_on_condition_check_failure(ReturnValuesOnConditionCheckFailure::AllOld);
@@ -694,6 +781,15 @@ fn entry_with_balance_from_item(
         ),
     };
 
+    let mut created_at = item
+        .get("created_at")
+        .ok_or(GetBalanceError::MissingField("created_at".into()))?
+        .as_s()
+        .map_err(|_| GetBalanceError::ErrorReadingField("created_at".into()))?
+        .as_str();
+    if let Some((separated_created_at, _sequence)) = created_at.split_once('|') {
+        created_at = separated_created_at;
+    }
     Ok(EntryWithBalance {
         account_id,
         entry_id,
@@ -748,13 +844,15 @@ fn entry_with_balance_from_item(
                 .map_err(|_| GetBalanceError::ErrorReadingField("entry_status".into()))?,
         )
         .map_err(|_| GetBalanceError::ErrorReadingField("entry_status".into()))?,
-        created_at: DateTime::from_str(
-            item.get("created_at")
-                .ok_or(GetBalanceError::MissingField("created_at".into()))?
-                .as_s()
-                .map_err(|_| GetBalanceError::ErrorReadingField("created_at".into()))?,
-        )
-        .map_err(|_| GetBalanceError::ErrorReadingField("created_at".into()))?,
+        sequence: item
+            .get("sequence")
+            .ok_or(GetBalanceError::MissingField("sequence".into()))?
+            .as_n()
+            .map_err(|_| GetBalanceError::ErrorReadingField("sequence".into()))?
+            .parse::<u128>()
+            .map_err(|_| GetBalanceError::ErrorReadingField("sequence".into()))?,
+        created_at: DateTime::from_str(created_at)
+            .map_err(|_| GetBalanceError::ErrorReadingField("created_at".into()))?,
     })
 }
 
@@ -838,6 +936,7 @@ pub mod test {
     use tokio::sync::Mutex;
 
     use super::*;
+
     pub struct LedgerEntryRepositoryForTests {
         internal_state: Mutex<InternalState>,
     }
@@ -913,6 +1012,7 @@ pub mod test {
             _end_date: &DateTime<Utc>,
             _limit: u8,
             _order: &Order,
+            _sequence: Option<u128>,
         ) -> Result<(Vec<EntryWithBalance>, Option<Cursor>), GetBalanceError> {
             todo!()
         }

@@ -1,9 +1,9 @@
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
+use crate::domain::entity::{Entry, EntryId, EntryWithBalance};
 use crate::domain::entity::AccountId;
 use crate::domain::entity::Cursor;
-use crate::domain::entity::{Entry, EntryId, EntryWithBalance};
 
 use super::entity::EntryToContinue;
 use super::entity::Order;
@@ -41,6 +41,7 @@ pub trait LedgerEntryRepository {
         end_date: &DateTime<Utc>,
         limit: u8,
         order: &Order,
+        sequence: Option<u128>,
     ) -> Result<(Vec<EntryWithBalance>, Option<Cursor>), GetBalanceError>;
 }
 

@@ -64,17 +64,19 @@ pub async fn push_entries_use_case(
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use crate::{
-        domain::{
-            entity::AccountId,
-            use_case::test::{get_repository, get_rng, EntryBuilder, EntryWithBalanceBuilder},
-        },
-        gateway::ledger_entry_repository::test::LedgerEntryRepositoryForTests,
-    };
     use anyhow::Result;
     use assertables::*;
     use fake::{Fake, Faker};
+
+    use crate::{
+        app::test::{get_repository, get_rng},
+        domain::entity::{
+            {EntryBuilder, EntryWithBalanceBuilder}, AccountId,
+        },
+        gateway::ledger_entry_repository::test::LedgerEntryRepositoryForTests,
+    };
+
+    use super::*;
 
     #[tokio_shared_rt::test(shared)]
     async fn push_single_entry() -> Result<()> {

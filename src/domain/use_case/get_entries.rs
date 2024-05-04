@@ -16,7 +16,7 @@ pub async fn get_entries_use_case(
     order: &Order,
 ) -> Result<(Vec<EntryWithBalance>, Option<Cursor>), GetBalanceError> {
     repository
-        .get_entries(account_id, start_date, end_date, limit, order)
+        .get_entries(account_id, start_date, end_date, limit, order, None)
         .await
 }
 
@@ -30,11 +30,19 @@ pub async fn get_entries_from_cursor_use_case(
         end_date,
         order,
         account_id,
+        sequence,
     } = cursor
     else {
         return Err(GetBalanceError::Other(anyhow!("Invalid cursor")));
     };
     repository
-        .get_entries(&account_id, &start_date, &end_date, limit, &order)
+        .get_entries(
+            &account_id,
+            &start_date,
+            &end_date,
+            limit,
+            &order,
+            Some(sequence),
+        )
         .await
 }

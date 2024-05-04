@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 pub use account_id::AccountId;
 pub use cursor::{Cursor, EntryToContinue};
 pub use entry::{Entry, EntryId, EntryStatus, EntryWithBalance};
+#[cfg(test)]
+pub use entry::test::{EntryBuilder, EntryWithBalanceBuilder};
 pub use ledger_balance_name::LedgerBalanceName;
 pub use ledger_field_name::LedgerFieldName;
 

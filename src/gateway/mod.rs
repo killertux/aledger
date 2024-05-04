@@ -10,7 +10,7 @@ use aws_sdk_dynamodb::{
 pub mod ledger_entry_repository;
 
 pub async fn delete_database(client: &Client) -> Result<()> {
-    let _ = client.delete_table().table_name("a_ledger").send().await?;
+    let _ = client.delete_table().table_name("a_ledger").send().await;
     tracing::info!("a_ledger table dropped!");
 
     Ok(())

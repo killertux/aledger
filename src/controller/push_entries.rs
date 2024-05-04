@@ -42,7 +42,7 @@ pub struct PushEntryRequest {
     account_id: AccountId,
     entry_id: EntryId,
     ledger_fields: HashMap<LedgerFieldName, i128>,
-    additional_fields: Value,
+    additional_fields: Option<Value>,
 }
 
 #[derive(Serialize)]
@@ -63,7 +63,7 @@ impl From<PushEntryRequest> for Entry {
             account_id: value.account_id,
             entry_id: value.entry_id,
             ledger_fields: value.ledger_fields,
-            additional_fields: value.additional_fields,
+            additional_fields: value.additional_fields.unwrap_or(Value::Null),
             status: EntryStatus::Applied,
         }
     }
@@ -75,7 +75,7 @@ impl From<Entry> for PushEntryRequest {
             account_id: value.account_id,
             entry_id: value.entry_id,
             ledger_fields: value.ledger_fields,
-            additional_fields: value.additional_fields,
+            additional_fields: Some(value.additional_fields),
         }
     }
 }

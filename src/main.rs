@@ -85,7 +85,3 @@ fn tracing_setup() -> Result<()> {
     tracing::subscriber::set_global_default(subscriber)?;
     Ok(())
 }
-
-async fn root() -> &'static str {
-    "Hello, World!"
-}
