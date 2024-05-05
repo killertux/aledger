@@ -41,7 +41,7 @@ pub trait LedgerEntryRepository {
         end_date: &DateTime<Utc>,
         limit: u8,
         order: &Order,
-        sequence: Option<u128>,
+        sequence: Option<u64>,
     ) -> Result<(Vec<EntryWithBalance>, Option<Cursor>), GetBalanceError>;
 }
 

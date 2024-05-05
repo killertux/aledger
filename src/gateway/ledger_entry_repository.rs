@@ -309,7 +309,7 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
         end_date: &DateTime<Utc>,
         limit: u8,
         order: &Order,
-        sequence: Option<u128>,
+        sequence: Option<u64>,
     ) -> Result<(Vec<EntryWithBalance>, Option<Cursor>), GetBalanceError> {
         let start_naive_date = start_date.date_naive();
         let end_naive_date = end_date.date_naive();
@@ -337,67 +337,36 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
                         .map_err(anyhow::Error::from)?,
                 );
             let query_builder = match order {
-                Order::Asc => query_builder
-                    .key_conditions(
-                        "created_at",
-                        Condition::builder()
-                            .comparison_operator(ComparisonOperator::Gt)
-                            .attribute_value_list(AttributeValue::S(
-                                if let Some(sequence) = sequence {
-                                    format!("{}|{}", start_date.to_string(), sequence)
-                                } else {
-                                    start_date.to_string()
-                                },
-                            ))
-                            .build()
-                            .map_err(anyhow::Error::from)?,
-                    )
-                    .key_conditions(
-                        "created_at",
-                        Condition::builder()
-                            .comparison_operator(ComparisonOperator::Lt)
-                            .attribute_value_list(AttributeValue::S(format!(
-                                "{}|{}",
-                                end_date.to_string(),
-                                u128::MAX
-                            )))
-                            .build()
-                            .map_err(anyhow::Error::from)?,
-                    ),
-                Order::Desc => query_builder
-                    .key_conditions(
-                        "created_at",
-                        Condition::builder()
-                            .comparison_operator(ComparisonOperator::Gt)
-                            .attribute_value_list(AttributeValue::S(start_date.to_string()))
-                            .build()
-                            .map_err(anyhow::Error::from)?,
-                    )
-                    .key_conditions(
-                        "created_at",
-                        Condition::builder()
-                            .comparison_operator(ComparisonOperator::Lt)
-                            .attribute_value_list(AttributeValue::S(
-                                if let Some(sequence) = sequence {
-                                    format!("{}|{}", start_date.to_string(), sequence)
-                                } else {
-                                    start_date.to_string()
-                                },
-                            ))
-                            .build()
-                            .map_err(anyhow::Error::from)?,
-                    ),
-            };
-            let items = query_builder
-                .key_conditions(
+                Order::Asc => query_builder.key_conditions(
+                    "created_at",
+                    Condition::builder()
+                        .comparison_operator(ComparisonOperator::Between)
+                        .attribute_value_list(AttributeValue::S(if let Some(sequence) = sequence {
+                            format_created_at_and_sequence(start_date, sequence + 1)
+                        } else {
+                            start_date.to_string()
+                        }))
+                        .attribute_value_list(AttributeValue::S(format_created_at_and_sequence(
+                            end_date,
+                            u64::MAX,
+                        )))
+                        .build()
+                        .map_err(anyhow::Error::from)?,
+                ),
+                Order::Desc => query_builder.key_conditions(
                     "created_at",
                     Condition::builder()
                         .comparison_operator(ComparisonOperator::Between)
                         .attribute_value_list(AttributeValue::S(start_date.to_string()))
-                        .attribute_value_list(AttributeValue::S(end_date.to_string()))
+                        .attribute_value_list(AttributeValue::S(format_created_at_and_sequence(
+                            end_date,
+                            sequence.map(|sequence| sequence - 1).unwrap_or(u64::MAX),
+                        )))
                         .build()
                         .map_err(anyhow::Error::from)?,
-                )
+                ),
+            };
+            let items = query_builder
                 .filter_expression("sk <> :head")
                 .expression_attribute_values(":head", AttributeValue::S("HEAD".into()))
                 .scan_index_forward(*order == Order::Asc)
@@ -484,7 +453,7 @@ impl DynamoDbLedgerEntryRepository {
             .await
             .map_err(anyhow::Error::from)?
             .item()
-            .map(|item| -> Result<(HashMap<LedgerBalanceName, i128>, u128)> {
+            .map(|item| -> Result<(HashMap<LedgerBalanceName, i128>, u64)> {
                 Ok((
                     item.get("ledger_balances")
                         .ok_or(anyhow!(
@@ -743,10 +712,9 @@ fn create_transact_item_for_entry(
         .item("sequence", AttributeValue::N(entry.sequence.to_string()))
         .item(
             "created_at",
-            AttributeValue::S(format!(
-                "{}|{}",
-                entry.created_at.to_string(),
-                entry.sequence
+            AttributeValue::S(format_created_at_and_sequence(
+                &entry.created_at,
+                entry.sequence,
             )),
         )
         .condition_expression("attribute_not_exists(pk)")
@@ -849,7 +817,7 @@ fn entry_with_balance_from_item(
             .ok_or(GetBalanceError::MissingField("sequence".into()))?
             .as_n()
             .map_err(|_| GetBalanceError::ErrorReadingField("sequence".into()))?
-            .parse::<u128>()
+            .parse::<u64>()
             .map_err(|_| GetBalanceError::ErrorReadingField("sequence".into()))?,
         created_at: DateTime::from_str(created_at)
             .map_err(|_| GetBalanceError::ErrorReadingField("created_at".into()))?,
@@ -1012,9 +980,13 @@ pub mod test {
             _end_date: &DateTime<Utc>,
             _limit: u8,
             _order: &Order,
-            _sequence: Option<u128>,
+            _sequence: Option<u64>,
         ) -> Result<(Vec<EntryWithBalance>, Option<Cursor>), GetBalanceError> {
             todo!()
         }
     }
+}
+
+fn format_created_at_and_sequence(created_at: &DateTime<Utc>, sequence: u64) -> String {
+    format!("{}|{:0>20}", created_at.to_string(), sequence.to_string())
 }

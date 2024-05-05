@@ -11,7 +11,7 @@ pub fn utc_now() -> DateTime<Utc> {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use std::cell::Cell;
 
     use chrono::{DateTime, Utc};
@@ -20,12 +20,16 @@ mod test {
         static TIMESTAMP: Cell<i64> = const { Cell::new(0) };
     }
 
-    pub fn now() -> DateTime<chrono::Utc> {
+    pub fn now() -> DateTime<Utc> {
         TIMESTAMP.with(|timestamp| {
             if timestamp.get() == 0 {
                 timestamp.set(Utc::now().timestamp())
             }
             DateTime::from_timestamp(timestamp.get(), 0).expect("a valid timestamp set")
         })
+    }
+
+    pub fn set_now(now: &DateTime<Utc>) {
+        TIMESTAMP.set(now.timestamp());
     }
 }

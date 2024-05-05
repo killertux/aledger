@@ -79,7 +79,7 @@ pub struct EntryWithBalance {
     pub ledger_fields: HashMap<LedgerFieldName, i128>,
     pub additional_fields: Value,
     pub status: EntryStatus,
-    pub sequence: u128,
+    pub sequence: u64,
     pub created_at: DateTime<Utc>,
 }
 
@@ -134,7 +134,7 @@ pub mod test {
     }
 
     thread_local! {
-        pub static SEQUENCE_FAKE: RefCell<HashMap<AccountId, u128>> = RefCell::new(HashMap::new()) ;
+        pub static SEQUENCE_FAKE: RefCell<HashMap<AccountId, u64>> = RefCell::new(HashMap::new()) ;
     }
 
     pub struct EntryWithBalanceBuilder {

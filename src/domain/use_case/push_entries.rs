@@ -63,9 +63,11 @@ pub async fn push_entries_use_case(
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use anyhow::Result;
     use assertables::*;
+    use chrono::DateTime;
+    use chrono::Utc;
     use fake::{Fake, Faker};
 
     use crate::{
@@ -75,6 +77,7 @@ mod test {
         },
         gateway::ledger_entry_repository::test::LedgerEntryRepositoryForTests,
     };
+    use crate::utils::test::set_now;
 
     use super::*;
 
@@ -358,5 +361,33 @@ mod test {
         );
         assert_eq!(5, repository.get_append_entries_call_count().await);
         Ok(())
+    }
+
+    pub async fn push_multiple_entries(
+        repository: &impl LedgerEntryRepository,
+        account_id: &AccountId,
+        n_entries: u16,
+    ) -> Vec<EntryWithBalance> {
+        let entries = (0..n_entries).map(|_| {
+            EntryBuilder::new()
+                .with_account_id(account_id.clone())
+                .with_ledger_field("amount", Faker.fake::<i64>() as i128)
+                .build()
+        });
+        let (applied, non_applied) =
+            push_entries_use_case(repository, get_rng().await, entries.into_iter()).await;
+        assert!(non_applied.is_empty());
+        applied
+    }
+
+    pub async fn push_entry_with_date(
+        repository: &impl LedgerEntryRepository,
+        account_id: &AccountId,
+        date_time: &DateTime<Utc>,
+    ) -> EntryWithBalance {
+        set_now(date_time);
+        push_multiple_entries(repository, account_id, 1)
+            .await
+            .remove(0)
     }
 }

@@ -13,7 +13,7 @@ pub enum Cursor {
         account_id: AccountId,
         start_date: DateTime<Utc>,
         end_date: DateTime<Utc>,
-        sequence: u128,
+        sequence: u64,
         order: Order,
     },
     FromEntryQuery {
