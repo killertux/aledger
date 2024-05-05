@@ -1,14 +1,14 @@
 use std::{borrow::Cow, collections::HashMap};
 
-use axum::{http::StatusCode, response::IntoResponse, Json};
+use axum::{http::StatusCode, Json, response::IntoResponse};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::domain::entity::{EntryId, EntryStatus, EntryWithBalance};
 use crate::domain::entity::AccountId;
 use crate::domain::entity::LedgerBalanceName;
 use crate::domain::entity::LedgerFieldName;
-use crate::domain::entity::{EntryId, EntryStatus, EntryWithBalance};
 
 pub mod delete_entries;
 pub mod get_balance;
@@ -92,18 +92,5 @@ impl<'a> From<anyhow::Error> for JsonError<'a> {
     fn from(e: anyhow::Error) -> JsonError<'a> {
         tracing::error!("Internal server error {}", e);
         JsonError::internal_server_error()
-    }
-}
-
-pub trait MapErrToInternalServerError<'a, T> {
-    fn map_err_to_internal_server_error(self) -> Result<T, JsonError<'a>>;
-}
-
-impl<'a, T> MapErrToInternalServerError<'a, T> for Result<T, anyhow::Error> {
-    fn map_err_to_internal_server_error(self) -> Result<T, JsonError<'a>> {
-        self.map_err(|error| {
-            tracing::error!("Fatal error: {}", error);
-            JsonError::internal_server_error()
-        })
     }
 }

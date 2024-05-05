@@ -988,5 +988,5 @@ pub mod test {
 }
 
 fn format_created_at_and_sequence(created_at: &DateTime<Utc>, sequence: u64) -> String {
-    format!("{}|{:0>20}", created_at.to_string(), sequence.to_string())
+    format!("{}|{:0>20}", created_at, sequence)
 }

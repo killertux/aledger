@@ -73,3 +73,103 @@ pub async fn delete_entries_use_case(
 
     (applied_entries_with_balance, non_applied_entries)
 }
+
+#[cfg(test)]
+mod test {
+    use anyhow::Result;
+    use fake::{Fake, Faker};
+
+    use crate::app::test::{get_repository, get_rng};
+    use crate::domain::{
+        entity::{DeleteEntryRequest, EntryStatus},
+        use_case::push_entries::test::push_multiple_entries,
+    };
+    use crate::domain::entity::LedgerBalanceName;
+
+    use super::*;
+
+    #[tokio_shared_rt::test(shared)]
+    async fn delete_entry_that_does_not_exist() -> Result<()> {
+        let repository = get_repository().await;
+        let account_id = Faker.fake();
+
+        let entries = push_multiple_entries(&repository, &account_id, 1).await;
+        let (applied, non_applied) = delete_entries_use_case(
+            &repository,
+            get_rng().await,
+            vec![
+                DeleteEntryRequest {
+                    account_id: account_id.clone(),
+                    entry_id: EntryId::new("invalid".into())?,
+                },
+                DeleteEntryRequest {
+                    account_id: account_id.clone(),
+                    entry_id: entries[0].entry_id.clone(),
+                },
+            ]
+            .into_iter(),
+        )
+        .await;
+
+        assert_eq!(1, applied.len());
+        assert_eq!(
+            EntryStatus::Reverts(entries[0].entry_id.clone()),
+            applied[0].status
+        );
+        assert_eq!(
+            0,
+            *applied[0]
+                .ledger_balances
+                .get(&LedgerBalanceName::new("balance_amount".into())?)
+                .expect("We know that there is this field")
+        );
+        assert_eq!(
+            vec![(
+                NonAppliedReason::EntriesDoesNotExists,
+                DeleteEntryRequest {
+                    account_id: account_id.clone(),
+                    entry_id: EntryId::new("invalid".into())?,
+                }
+            )],
+            non_applied
+        );
+
+        Ok(())
+    }
+
+    #[tokio_shared_rt::test(shared)]
+    async fn delete_entries() -> Result<()> {
+        let repository = get_repository().await;
+        let account_id = Faker.fake();
+
+        let entries = push_multiple_entries(&repository, &account_id, 2).await;
+        let (applied, non_applied) = delete_entries_use_case(
+            &repository,
+            get_rng().await,
+            vec![
+                DeleteEntryRequest {
+                    account_id: account_id.clone(),
+                    entry_id: entries[0].entry_id.clone(),
+                },
+                DeleteEntryRequest {
+                    account_id: account_id.clone(),
+                    entry_id: entries[1].entry_id.clone(),
+                },
+            ]
+            .into_iter(),
+        )
+        .await;
+        assert!(non_applied.is_empty());
+
+        assert_eq!(
+            EntryStatus::Reverts(entries[0].entry_id.clone()),
+            applied[0].status
+        );
+        assert_eq!(
+            EntryStatus::Reverts(entries[1].entry_id.clone()),
+            applied[1].status
+        );
+
+        Ok(())
+    }
+}

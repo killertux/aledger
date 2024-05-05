@@ -78,7 +78,7 @@ impl From<AppendEntriesError> for RevertEntriesError {
 
 #[derive(Debug, Error)]
 pub enum GetBalanceError {
-    #[error("Account not found with id `{0:?}`")]
+    #[error("Account not found with id `{0}`")]
     NotFound(AccountId),
     #[error("Missing field `{0}`")]
     MissingField(String),

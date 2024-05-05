@@ -78,6 +78,7 @@ pub mod test {
         gateway::ledger_entry_repository::test::LedgerEntryRepositoryForTests,
     };
     use crate::utils::test::set_now;
+    use crate::utils::utc_now;
 
     use super::*;
 
@@ -378,6 +379,20 @@ pub mod test {
             push_entries_use_case(repository, get_rng().await, entries.into_iter()).await;
         assert!(non_applied.is_empty());
         applied
+    }
+
+    pub async fn push_multiple_entries_with_date_interval(
+        repository: &impl LedgerEntryRepository,
+        account_id: &AccountId,
+        n_entries: u16,
+    ) -> Vec<EntryWithBalance> {
+        let mut date = utc_now();
+        let mut result = Vec::new();
+        for _ in 0..n_entries {
+            result.push(push_entry_with_date(repository, &account_id, &date).await);
+            date += Duration::from_secs(35);
+        }
+        result
     }
 
     pub async fn push_entry_with_date(
