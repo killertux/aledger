@@ -58,9 +58,20 @@ async fn get_entry(
         entry_id: entry_id.clone(),
         entry_to_continue: match &last.status {
             EntryStatus::Applied => EntryToContinue::CurrentEntry,
-            EntryStatus::RevertedBy(entry_id) => EntryToContinue::RevertedBy(entry_id.clone()),
-            EntryStatus::Reverts(_) => EntryToContinue::Start,
+            EntryStatus::Reverted(sequence) => EntryToContinue::RevertedBy(*sequence),
+            EntryStatus::Revert(_) => EntryToContinue::Start,
         },
     });
     Ok((entries, cursor))
+}
+
+#[cfg(test)]
+mod test {
+    use anyhow::Result;
+    use fake::{Fake, Faker};
+
+    #[tokio_shared_rt::test(shared)]
+    async fn get_entry_withou_any_revert() -> Result<()> {
+        Ok(())
+    }
 }

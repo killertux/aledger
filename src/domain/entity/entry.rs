@@ -55,8 +55,8 @@ pub struct Entry {
 #[serde(rename_all = "snake_case")]
 pub enum EntryStatus {
     Applied,
-    RevertedBy(EntryId),
-    Reverts(EntryId),
+    Reverted(u64),
+    Revert(u64),
 }
 
 impl From<EntryWithBalance> for Entry {

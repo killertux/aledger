@@ -4,8 +4,8 @@ use itertools::Itertools;
 use rand::Rng;
 use tokio::time::sleep;
 
-use crate::domain::entity::{EntryId, EntryWithBalance};
 use crate::domain::entity::DeleteEntryRequest;
+use crate::domain::entity::{EntryId, EntryWithBalance};
 use crate::domain::gateway::{LedgerEntryRepository, RevertEntriesError};
 use crate::domain::use_case;
 use crate::domain::use_case::NonAppliedReason;
@@ -80,11 +80,14 @@ mod test {
     use fake::{Fake, Faker};
 
     use crate::app::test::{get_repository, get_rng};
+    use crate::domain::entity::{LedgerBalanceName, Order};
     use crate::domain::{
         entity::{DeleteEntryRequest, EntryStatus},
-        use_case::push_entries::test::push_multiple_entries,
+        use_case::{
+            get_entries_use_case, push_entries::test::push_multiple_entries, push_entries_use_case,
+        },
     };
-    use crate::domain::entity::LedgerBalanceName;
+    use crate::utils::utc_now;
 
     use super::*;
 
@@ -112,10 +115,7 @@ mod test {
         .await;
 
         assert_eq!(1, applied.len());
-        assert_eq!(
-            EntryStatus::Reverts(entries[0].entry_id.clone()),
-            applied[0].status
-        );
+        assert_eq!(EntryStatus::Revert(entries[0].sequence), applied[0].status);
         assert_eq!(
             0,
             *applied[0]
@@ -160,16 +160,66 @@ mod test {
         )
         .await;
         assert!(non_applied.is_empty());
+        assert_eq!(EntryStatus::Revert(entries[0].sequence), applied[0].status);
+        assert_eq!(EntryStatus::Revert(entries[1].sequence), applied[1].status);
 
+        let entries = get_entries_use_case(
+            &repository,
+            &account_id,
+            &utc_now(),
+            &utc_now(),
+            10,
+            &Order::Desc,
+        )
+        .await?
+        .0;
+        assert_eq!(4, entries.len());
         assert_eq!(
-            EntryStatus::Reverts(entries[0].entry_id.clone()),
-            applied[0].status
+            EntryStatus::Reverted(entries[0].sequence),
+            entries[2].status
         );
         assert_eq!(
-            EntryStatus::Reverts(entries[1].entry_id.clone()),
-            applied[1].status
+            EntryStatus::Reverted(entries[1].sequence),
+            entries[3].status
+        );
+        assert_eq!(
+            0,
+            *entries[0]
+                .ledger_balances
+                .get(&LedgerBalanceName::new("balance_amount".into())?)
+                .expect("We know that there is this field")
         );
 
+        Ok(())
+    }
+
+    #[tokio_shared_rt::test(shared)]
+    async fn delete_entries_should_allow_to_re_add() -> Result<()> {
+        let repository = get_repository().await;
+        let account_id = Faker.fake();
+
+        let entries = push_multiple_entries(&repository, &account_id, 1).await;
+        let (_, non_applied) = delete_entries_use_case(
+            &repository,
+            get_rng().await,
+            vec![DeleteEntryRequest {
+                account_id: account_id.clone(),
+                entry_id: entries[0].entry_id.clone(),
+            }]
+            .into_iter(),
+        )
+        .await;
+        assert!(non_applied.is_empty());
+        let (mut applied, non_applied) = push_entries_use_case(
+            &repository,
+            get_rng().await,
+            [entries[0].clone().into()].into_iter(),
+        )
+        .await;
+        assert!(non_applied.is_empty());
+        assert_ne!(entries[0].sequence, applied[0].sequence);
+        applied[0].sequence = entries[0].sequence;
+        assert_eq!(entries, applied);
         Ok(())
     }
 }

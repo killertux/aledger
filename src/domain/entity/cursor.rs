@@ -1,5 +1,5 @@
-use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -27,7 +27,7 @@ pub enum Cursor {
 pub enum EntryToContinue {
     Start,
     CurrentEntry,
-    RevertedBy(EntryId),
+    RevertedBy(u64),
 }
 
 impl Cursor {

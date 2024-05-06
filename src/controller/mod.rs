@@ -1,14 +1,14 @@
 use std::{borrow::Cow, collections::HashMap};
 
-use axum::{http::StatusCode, Json, response::IntoResponse};
+use axum::{http::StatusCode, response::IntoResponse, Json};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::domain::entity::{EntryId, EntryStatus, EntryWithBalance};
 use crate::domain::entity::AccountId;
 use crate::domain::entity::LedgerBalanceName;
 use crate::domain::entity::LedgerFieldName;
+use crate::domain::entity::{EntryId, EntryStatus, EntryWithBalance};
 
 pub mod delete_entries;
 pub mod get_balance;
@@ -23,7 +23,7 @@ pub struct LedgerResponse {
     ledger_balances: HashMap<LedgerBalanceName, i128>,
     ledger_fields: HashMap<LedgerFieldName, i128>,
     additional_fields: Value,
-    status: EntryStatus,
+    status: Status,
     created_at: DateTime<Utc>,
 }
 
@@ -35,8 +35,25 @@ impl From<EntryWithBalance> for LedgerResponse {
             ledger_balances: value.ledger_balances,
             ledger_fields: value.ledger_fields,
             additional_fields: value.additional_fields,
-            status: value.status,
+            status: value.status.into(),
             created_at: value.created_at,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum Status {
+    Applied,
+    Reverted,
+    Revert,
+}
+
+impl From<EntryStatus> for Status {
+    fn from(value: EntryStatus) -> Status {
+        match value {
+            EntryStatus::Applied => Status::Applied,
+            EntryStatus::Reverted(_) => Status::Reverted,
+            EntryStatus::Revert(_) => Status::Revert,
         }
     }
 }

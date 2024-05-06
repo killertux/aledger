@@ -4,8 +4,8 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Result};
+use aws_sdk_dynamodb::types::ComparisonOperator;
 use aws_sdk_dynamodb::{
-    Client,
     operation::transact_write_items::{
         builders::TransactWriteItemsFluentBuilder, TransactWriteItemsError,
     },
@@ -13,14 +13,12 @@ use aws_sdk_dynamodb::{
         AttributeValue, Condition, Delete, KeysAndAttributes, Put,
         ReturnValuesOnConditionCheckFailure, TransactWriteItem, Update,
     },
+    Client,
 };
-use aws_sdk_dynamodb::types::ComparisonOperator;
 use chrono::{DateTime, Days, Utc};
 use itertools::Itertools;
-use ulid::Ulid;
 use uuid::Uuid;
 
-use crate::{domain::entity::Cursor, utils::utc_now};
 use crate::domain::{
     entity::{
         AccountId, Entry, EntryId, EntryStatus, EntryToContinue, EntryWithBalance,
@@ -28,6 +26,7 @@ use crate::domain::{
     },
     gateway::{AppendEntriesError, GetBalanceError, LedgerEntryRepository, RevertEntriesError},
 };
+use crate::{domain::entity::Cursor, utils::utc_now};
 
 pub struct DynamoDbLedgerEntryRepository {
     client: Client,
@@ -152,13 +151,13 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
         let (mut transact, new_entries_with_balance) = self
             .internal_append_entries(
                 account_id,
-                &entry_with_balances
-                    .values()
-                    .map(|entry| entry.clone().into())
-                    .map(|mut entry: Entry| {
-                        let status = EntryStatus::Reverts(entry.entry_id);
-                        entry.entry_id = EntryId::new_unchecked(Ulid::new().to_string());
-                        entry.status = status;
+                &entries_ids
+                    .iter()
+                    .filter_map(|entry_id| entry_with_balances.get(entry_id).cloned())
+                    .map(|entry: EntryWithBalance| {
+                        let sequence = entry.sequence;
+                        let mut entry: Entry = entry.into();
+                        entry.status = EntryStatus::Revert(sequence);
                         entry.ledger_fields = entry
                             .ledger_fields
                             .into_iter()
@@ -171,13 +170,20 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
             )
             .await?;
         for entry in new_entries_with_balance.iter() {
-            let EntryStatus::Reverts(entry_id) = &entry.status else {
-                return Err(anyhow!("Expects status to be reverts").into());
+            let EntryStatus::Revert(sequence) = &entry.status else {
+                return Err(anyhow!("Expects status to be revert").into());
             };
             let mut old_entry = entry_with_balances
-                .remove(entry_id)
+                .remove(
+                    &entry_with_balances
+                        .iter()
+                        .find(|(_, entry_with_balance)| entry_with_balance.sequence == *sequence)
+                        .ok_or(anyhow!("We should alway be able to get the old entry here"))?
+                        .0
+                        .clone(),
+                )
                 .ok_or(anyhow!("We should alway be able to get the old entry here"))?;
-            old_entry.status = EntryStatus::RevertedBy(entry.entry_id.clone());
+            old_entry.status = EntryStatus::Reverted(entry.sequence);
             transact = transact.transact_items(create_transact_item_for_entry(&old_entry, false)?);
             transact = transact.transact_items(
                 TransactWriteItem::builder()
@@ -265,9 +271,9 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
                 .attribute_value_list(AttributeValue::S("|~".into()))
                 .build()
                 .map_err(anyhow::Error::from)?,
-            EntryToContinue::RevertedBy(entry_id) => Condition::builder()
+            EntryToContinue::RevertedBy(sequence) => Condition::builder()
                 .comparison_operator(ComparisonOperator::Lt)
-                .attribute_value_list(Sk::RevertedEntry(entry_id.clone()).into())
+                .attribute_value_list(Sk::RevertedEntry(*sequence).into())
                 .build()
                 .map_err(anyhow::Error::from)?,
         };
@@ -654,11 +660,15 @@ fn create_transact_item_for_entry(
 ) -> Result<TransactWriteItem> {
     let (pk, sk) = match (is_head, &entry.status) {
         (true, _) => (Pk::Balance(entry.account_id.clone()), Sk::CurrentEntry),
-        (false, EntryStatus::RevertedBy(entry_id)) => (
+        (false, EntryStatus::Reverted(sequence)) => (
             Pk::Entry(entry.account_id.clone(), entry.entry_id.clone()),
-            Sk::RevertedEntry(entry_id.clone()),
+            Sk::RevertedEntry(*sequence),
         ),
-        (false, _) => (
+        (false, EntryStatus::Revert(_)) => (
+            Pk::Entry(entry.account_id.clone(), entry.entry_id.clone()),
+            Sk::RevertEntry,
+        ),
+        (false, EntryStatus::Applied) => (
             Pk::Entry(entry.account_id.clone(), entry.entry_id.clone()),
             Sk::CurrentEntry,
         ),
@@ -868,15 +878,17 @@ impl TryFrom<AttributeValue> for Pk {
 
 enum Sk {
     CurrentEntry,
-    RevertedEntry(EntryId),
+    RevertEntry,
+    RevertedEntry(u64),
 }
 
 impl From<Sk> for AttributeValue {
     fn from(value: Sk) -> Self {
         match value {
             Sk::CurrentEntry => AttributeValue::S("|~".into()),
-            Sk::RevertedEntry(entry_id) => {
-                AttributeValue::S(format!("|REVERT_ENTRY_ID:{}", entry_id))
+            Sk::RevertEntry => AttributeValue::S("|REVERT".into()),
+            Sk::RevertedEntry(sequence) => {
+                AttributeValue::S(format!("|REVERT_ENTRY_SEQUENCE:{}", sequence))
             }
         }
     }
@@ -892,10 +904,13 @@ impl TryFrom<AttributeValue> for Sk {
         if value == "|~" {
             return Ok(Sk::CurrentEntry);
         }
-        let Some(entry_id) = value.strip_prefix("|REVERT_ENTRY_ID:") else {
+        if value == "|REVERT" {
+            return Ok(Sk::RevertEntry);
+        }
+        let Some(sequence) = value.strip_prefix("|REVERT_ENTRY_SEQUENCE:") else {
             bail!("Expected REVERT_ENTRY_ID: prefix")
         };
-        Ok(Sk::RevertedEntry(EntryId::new_unchecked(entry_id.into())))
+        Ok(Sk::RevertedEntry(sequence.parse()?))
     }
 }
 
