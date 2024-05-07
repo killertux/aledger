@@ -27,7 +27,7 @@ pub enum Cursor {
 pub enum EntryToContinue {
     Start,
     CurrentEntry,
-    RevertedBy(u64),
+    Sequence(u64),
 }
 
 impl Cursor {

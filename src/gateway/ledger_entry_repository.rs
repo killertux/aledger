@@ -271,9 +271,9 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
                 .attribute_value_list(AttributeValue::S("|~".into()))
                 .build()
                 .map_err(anyhow::Error::from)?,
-            EntryToContinue::RevertedBy(sequence) => Condition::builder()
+            EntryToContinue::Sequence(sequence) => Condition::builder()
                 .comparison_operator(ComparisonOperator::Lt)
-                .attribute_value_list(Sk::RevertedEntry(*sequence).into())
+                .attribute_value_list(Sk::History(*sequence).into())
                 .build()
                 .map_err(anyhow::Error::from)?,
         };
@@ -660,13 +660,13 @@ fn create_transact_item_for_entry(
 ) -> Result<TransactWriteItem> {
     let (pk, sk) = match (is_head, &entry.status) {
         (true, _) => (Pk::Balance(entry.account_id.clone()), Sk::CurrentEntry),
-        (false, EntryStatus::Reverted(sequence)) => (
+        (false, EntryStatus::Reverted(_)) => (
             Pk::Entry(entry.account_id.clone(), entry.entry_id.clone()),
-            Sk::RevertedEntry(*sequence),
+            Sk::History(entry.sequence),
         ),
         (false, EntryStatus::Revert(_)) => (
             Pk::Entry(entry.account_id.clone(), entry.entry_id.clone()),
-            Sk::RevertEntry,
+            Sk::History(entry.sequence),
         ),
         (false, EntryStatus::Applied) => (
             Pk::Entry(entry.account_id.clone(), entry.entry_id.clone()),
@@ -878,18 +878,14 @@ impl TryFrom<AttributeValue> for Pk {
 
 enum Sk {
     CurrentEntry,
-    RevertEntry,
-    RevertedEntry(u64),
+    History(u64),
 }
 
 impl From<Sk> for AttributeValue {
     fn from(value: Sk) -> Self {
         match value {
             Sk::CurrentEntry => AttributeValue::S("|~".into()),
-            Sk::RevertEntry => AttributeValue::S("|REVERT".into()),
-            Sk::RevertedEntry(sequence) => {
-                AttributeValue::S(format!("|REVERT_ENTRY_SEQUENCE:{}", sequence))
-            }
+            Sk::History(sequence) => AttributeValue::S(format!("|HISTORY:{}", sequence)),
         }
     }
 }
@@ -904,13 +900,10 @@ impl TryFrom<AttributeValue> for Sk {
         if value == "|~" {
             return Ok(Sk::CurrentEntry);
         }
-        if value == "|REVERT" {
-            return Ok(Sk::RevertEntry);
+        if let Some(sequence) = value.strip_prefix("|HISTORY:") {
+            return Ok(Sk::History(sequence.parse()?));
         }
-        let Some(sequence) = value.strip_prefix("|REVERT_ENTRY_SEQUENCE:") else {
-            bail!("Expected REVERT_ENTRY_ID: prefix")
-        };
-        Ok(Sk::RevertedEntry(sequence.parse()?))
+        bail!("Unexpectes SK");
     }
 }
 

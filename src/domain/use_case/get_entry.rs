@@ -56,10 +56,10 @@ async fn get_entry(
     let cursor = entries.last().map(|last| Cursor::FromEntryQuery {
         account_id: account_id.clone(),
         entry_id: entry_id.clone(),
-        entry_to_continue: match &last.status {
+        entry_to_continue: match last.status {
             EntryStatus::Applied => EntryToContinue::CurrentEntry,
-            EntryStatus::Reverted(sequence) => EntryToContinue::RevertedBy(*sequence),
-            EntryStatus::Revert(_) => EntryToContinue::Start,
+            EntryStatus::Reverted(_) => EntryToContinue::Sequence(last.sequence),
+            EntryStatus::Revert(_) => EntryToContinue::Sequence(last.sequence),
         },
     });
     Ok((entries, cursor))
@@ -67,11 +67,175 @@ async fn get_entry(
 
 #[cfg(test)]
 mod test {
-    use anyhow::Result;
+    use super::*;
+    use crate::{
+        app::test::{get_repository, get_rng},
+        domain::{
+            entity::DeleteEntryRequest,
+            use_case::{
+                delete_entries_use_case, push_entries::test::push_multiple_entries,
+                push_entries_use_case,
+            },
+        },
+    };
+    use anyhow::{bail, Result};
     use fake::{Fake, Faker};
 
     #[tokio_shared_rt::test(shared)]
-    async fn get_entry_withou_any_revert() -> Result<()> {
+    async fn get_entry_without_any_revert() -> Result<()> {
+        let repository = get_repository().await;
+        let account_id = Faker.fake();
+        let entries = push_multiple_entries(&repository, &account_id, 1).await;
+        let result = get_entry_use_case(&repository, &account_id, &entries[0].entry_id, 10).await?;
+        assert_eq!(entries, result.0);
+        assert_eq!(None, result.1);
         Ok(())
+    }
+
+    #[tokio_shared_rt::test(shared)]
+    async fn get_single_entry_with_cursor() -> Result<()> {
+        let repository = get_repository().await;
+        let account_id = Faker.fake();
+        let entries = push_multiple_entries(&repository, &account_id, 1).await;
+        let (entry, Some(cursor)) =
+            get_entry_use_case(&repository, &account_id, &entries[0].entry_id, 1).await?
+        else {
+            bail!("expected a cursor");
+        };
+        assert_eq!(entries, entry);
+        assert_eq!(
+            Cursor::FromEntryQuery {
+                account_id: account_id.clone(),
+                entry_id: entries[0].entry_id.clone(),
+                entry_to_continue: EntryToContinue::CurrentEntry
+            },
+            cursor.clone()
+        );
+        let (entry, cursor) = get_entry_from_cursor_use_case(&repository, cursor, 1).await?;
+        assert!(entry.is_empty());
+        assert_eq!(None, cursor);
+        Ok(())
+    }
+
+    #[tokio_shared_rt::test(shared)]
+    async fn get_entry_with_one_revert() -> Result<()> {
+        let repository = get_repository().await;
+        let account_id = Faker.fake();
+        let mut entries = push_multiple_entries(&repository, &account_id, 1).await;
+        let (revert_entries, non_applied) = delete_entries_use_case(
+            &repository,
+            get_rng().await,
+            [DeleteEntryRequest {
+                account_id: entries[0].account_id.clone(),
+                entry_id: entries[0].entry_id.clone(),
+            }]
+            .into_iter(),
+        )
+        .await;
+        assert!(non_applied.is_empty());
+        let result = get_entry_use_case(&repository, &account_id, &entries[0].entry_id, 10).await?;
+        entries[0].status = EntryStatus::Reverted(1);
+        assert_eq!(
+            vec![revert_entries[0].clone(), entries[0].clone()],
+            result.0
+        );
+        assert_eq!(None, result.1);
+        Ok(())
+    }
+
+    #[tokio_shared_rt::test(shared)]
+    async fn get_entry_with_multiple_reverts() -> Result<()> {
+        let repository = get_repository().await;
+        let account_id = Faker.fake();
+        let mut entry_1 = push_multiple_entries(&repository, &account_id, 1)
+            .await
+            .remove(0);
+        let revert_1 = revert_entry(&repository, &entry_1).await;
+        let mut entry_2 = push_entries_use_case(
+            &repository,
+            get_rng().await,
+            [entry_1.clone().into()].into_iter(),
+        )
+        .await
+        .0
+        .remove(0);
+        let revert_2 = revert_entry(&repository, &entry_1).await;
+        let entry_3 = push_entries_use_case(
+            &repository,
+            get_rng().await,
+            [entry_1.clone().into()].into_iter(),
+        )
+        .await
+        .0
+        .remove(0);
+
+        let result = get_entry_use_case(&repository, &account_id, &entry_1.entry_id, 10).await?;
+        entry_1.status = EntryStatus::Reverted(1);
+        entry_2.status = EntryStatus::Reverted(3);
+        assert_eq!(
+            vec![entry_3, revert_2, entry_2, revert_1, entry_1],
+            result.0
+        );
+        assert_eq!(None, result.1);
+        Ok(())
+    }
+
+    #[tokio_shared_rt::test(shared)]
+    async fn get_entry_with_cursor() -> Result<()> {
+        let repository = get_repository().await;
+        let account_id = Faker.fake();
+        let mut entry_1 = push_multiple_entries(&repository, &account_id, 1)
+            .await
+            .remove(0);
+        let entry_id = entry_1.entry_id.clone();
+        let revert_1 = revert_entry(&repository, &entry_1).await;
+        let mut entry_2 = push_entries_use_case(
+            &repository,
+            get_rng().await,
+            [entry_1.clone().into()].into_iter(),
+        )
+        .await
+        .0
+        .remove(0);
+        let revert_2 = revert_entry(&repository, &entry_1).await;
+        entry_1.status = EntryStatus::Reverted(1);
+        entry_2.status = EntryStatus::Reverted(3);
+        let (entries, Some(cursor)) =
+            get_entry_use_case(&repository, &account_id, &entry_id, 2).await?
+        else {
+            bail!("Expect a cursor");
+        };
+        assert_eq!(
+            Cursor::FromEntryQuery {
+                account_id: account_id.clone(),
+                entry_id: entry_id.clone(),
+                entry_to_continue: EntryToContinue::Sequence(2)
+            },
+            cursor.clone()
+        );
+        assert_eq!(vec![revert_2, entry_2], entries);
+        let (entries, cursor) = get_entry_from_cursor_use_case(&repository, cursor, 3).await?;
+        assert_eq!(vec![revert_1, entry_1], entries);
+        assert_eq!(None, cursor);
+
+        Ok(())
+    }
+
+    async fn revert_entry(
+        repository: &impl LedgerEntryRepository,
+        entry: &EntryWithBalance,
+    ) -> EntryWithBalance {
+        let (mut revert_entries, non_applied) = delete_entries_use_case(
+            repository,
+            get_rng().await,
+            [DeleteEntryRequest {
+                account_id: entry.account_id.clone(),
+                entry_id: entry.entry_id.clone(),
+            }]
+            .into_iter(),
+        )
+        .await;
+        assert!(non_applied.is_empty());
+        revert_entries.remove(0)
     }
 }
