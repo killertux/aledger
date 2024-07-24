@@ -72,7 +72,7 @@ async fn dynamo_db_client() -> Client {
     }
     let dynamodb_local_config = builder.build();
 
-    aws_sdk_dynamodb::Client::from_conf(dynamodb_local_config)
+    Client::from_conf(dynamodb_local_config)
 }
 
 fn tracing_setup() -> Result<()> {

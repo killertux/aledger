@@ -60,7 +60,7 @@ impl NonAppliedReason {
             Self::OptimisticLockFailed => "Optimistic lock failed. Try again later".into(),
             Self::EntriesAlreadyExists => "Entry already exists for this account".into(),
             Self::EntriesDoesNotExists => {
-                "Entry does not exists or reverted for this account".into()
+                "Entry does not exist or reverted for this account".into()
             }
             Self::Other(err) => format!("Other unexpected error: {err}"),
         }
