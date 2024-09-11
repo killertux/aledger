@@ -1,6 +1,6 @@
 use aws_sdk_dynamodb::Client;
-use axum::Router;
 use axum::routing::{delete, get, post};
+use axum::Router;
 use rand::prelude::SmallRng;
 
 use crate::controller;
@@ -49,8 +49,8 @@ async fn root() -> &'static str {
 pub mod test {
     use aws_sdk_dynamodb::Client;
     use lazy_static::lazy_static;
-    use rand::{Rng, rngs::SmallRng};
     use rand::SeedableRng;
+    use rand::{rngs::SmallRng, Rng};
     use tokio::sync::Mutex;
 
     use crate::{

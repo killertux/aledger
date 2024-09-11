@@ -1,19 +1,17 @@
 use axum::{
-    debug_handler,
     extract::{Path, State},
     Json,
 };
 
+use crate::domain::entity::AccountId;
+use crate::domain::use_case::get_balance_use_case;
 use crate::{
     app::AppState, controller::JsonError, domain::gateway::GetBalanceError,
     gateway::ledger_entry_repository::DynamoDbLedgerEntryRepository,
 };
-use crate::domain::entity::AccountId;
-use crate::domain::use_case::get_balance_use_case;
 
 use super::LedgerResponse;
 
-#[debug_handler]
 pub async fn get_balance(
     State(app_state): State<AppState>,
     Path(account_id): Path<AccountId>,

@@ -1,5 +1,4 @@
 use axum::{
-    debug_handler,
     extract::{Path, Query, State},
     Json,
 };
@@ -16,7 +15,6 @@ use crate::{
 };
 use crate::{controller::GetEntriesLedgerResponse, domain::entity::AccountId};
 
-#[debug_handler]
 pub async fn get_entries(
     State(app_state): State<AppState>,
     Path(account_id): Path<AccountId>,

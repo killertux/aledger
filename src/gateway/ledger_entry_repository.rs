@@ -19,6 +19,7 @@ use chrono::{DateTime, Days, Utc};
 use itertools::Itertools;
 use uuid::Uuid;
 
+use crate::domain::entity::{Conditional, EntryWithConditionals};
 use crate::domain::{
     entity::{
         AccountId, Entry, EntryId, EntryStatus, EntryToContinue, EntryWithBalance,
@@ -42,7 +43,7 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
     async fn append_entries(
         &self,
         account_id: &AccountId,
-        entries: &[Entry],
+        entries: &[EntryWithConditionals],
     ) -> Result<Vec<EntryWithBalance>, AppendEntriesError> {
         let (transact, entries_with_balance) = self
             .internal_append_entries(account_id, entries, self.client.transact_write_items())
@@ -163,7 +164,7 @@ impl LedgerEntryRepository for DynamoDbLedgerEntryRepository {
                             .into_iter()
                             .map(|(key, value)| (key, -value))
                             .collect();
-                        entry
+                        entry.into()
                     })
                     .collect_vec(),
                 self.client.transact_write_items(),
@@ -446,7 +447,7 @@ impl DynamoDbLedgerEntryRepository {
     async fn internal_append_entries(
         &self,
         account_id: &AccountId,
-        entries: &[Entry],
+        entries: &[EntryWithConditionals],
         mut transact: TransactWriteItemsFluentBuilder,
     ) -> Result<(TransactWriteItemsFluentBuilder, Vec<EntryWithBalance>), AppendEntriesError> {
         let head_balances = self
@@ -491,7 +492,9 @@ impl DynamoDbLedgerEntryRepository {
             })
             .transpose()?;
         let mut entries_with_balance: Vec<EntryWithBalance> = Vec::new();
-        for entry in entries {
+        for entry_with_conditional in entries {
+            let entry = &entry_with_conditional.entry;
+            let conditionals = &entry_with_conditional.conditionals;
             let new_entry = match entries_with_balance.last() {
                 Some(entry_with_balance) => EntryWithBalance {
                     account_id: entry.account_id.clone(),
@@ -506,6 +509,7 @@ impl DynamoDbLedgerEntryRepository {
                                 .get(&ledger_balance_name)
                                 .unwrap_or(&0);
                             let new_balance = balance + value;
+
                             (ledger_balance_name, new_balance)
                         })
                         .collect(),
@@ -543,6 +547,7 @@ impl DynamoDbLedgerEntryRepository {
                     created_at: utc_now(),
                 },
             };
+            Self::validate_conditionals(conditionals, &new_entry)?;
             entries_with_balance.push(new_entry);
         }
         for entry in entries_with_balance.iter() {
@@ -651,6 +656,26 @@ impl DynamoDbLedgerEntryRepository {
             }
         }
         Ok((transact, entries_with_balance))
+    }
+
+    fn validate_conditionals(
+        conditionals: &Vec<Conditional>,
+        new_entry: &EntryWithBalance,
+    ) -> Result<(), AppendEntriesError> {
+        for conditional in conditionals {
+            match conditional {
+                Conditional::GreaterThanOrEqualTo { balance, value } => {
+                    let balance = new_entry.ledger_balances.get(&balance).unwrap_or(&0);
+                    if !(balance >= value) {
+                        return Err(AppendEntriesError::ConditionFailed(
+                            new_entry.entry_id.clone(),
+                            conditional.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -949,7 +974,7 @@ pub mod test {
         async fn append_entries(
             &self,
             _account_id: &AccountId,
-            _entries: &[Entry],
+            _entries: &[EntryWithConditionals],
         ) -> Result<Vec<EntryWithBalance>, AppendEntriesError> {
             let mut internal_state = self.internal_state.lock().await;
             internal_state.append_entries_call_count += 1;

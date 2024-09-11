@@ -1,19 +1,17 @@
 use axum::{
-    debug_handler,
     extract::{Path, Query, State},
     Json,
 };
 use serde::Deserialize;
 
+use crate::domain::entity::{Cursor, EntryId};
+use crate::domain::use_case::{get_entry_from_cursor_use_case, get_entry_use_case};
 use crate::{
     app::AppState, controller::JsonError, domain::gateway::GetBalanceError,
     gateway::ledger_entry_repository::DynamoDbLedgerEntryRepository,
 };
 use crate::{controller::GetEntriesLedgerResponse, domain::entity::AccountId};
-use crate::domain::entity::{Cursor, EntryId};
-use crate::domain::use_case::{get_entry_from_cursor_use_case, get_entry_use_case};
 
-#[debug_handler]
 pub async fn get_entry(
     State(app_state): State<AppState>,
     Path((account_id, entry_id)): Path<(AccountId, EntryId)>,

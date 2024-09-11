@@ -1,18 +1,17 @@
 use std::collections::HashMap;
 
-use axum::{debug_handler, extract::State, Json};
+use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{app::AppState, gateway::ledger_entry_repository::DynamoDbLedgerEntryRepository};
-use crate::domain::entity::{Entry, EntryId, EntryStatus};
-use crate::domain::entity::AccountId;
 use crate::domain::entity::LedgerFieldName;
+use crate::domain::entity::{AccountId, Conditional, EntryWithConditionals};
+use crate::domain::entity::{Entry, EntryId, EntryStatus};
 use crate::domain::use_case::push_entries_use_case;
+use crate::{app::AppState, gateway::ledger_entry_repository::DynamoDbLedgerEntryRepository};
 
 use super::LedgerResponse;
 
-#[debug_handler]
 pub async fn push_entries(
     State(app_state): State<AppState>,
     Json(push_entries): Json<Vec<PushEntryRequest>>,
@@ -43,6 +42,7 @@ pub struct PushEntryRequest {
     entry_id: EntryId,
     ledger_fields: HashMap<LedgerFieldName, i128>,
     additional_fields: Option<Value>,
+    conditionals: Option<Vec<Conditional>>,
 }
 
 #[derive(Serialize)]
@@ -57,14 +57,17 @@ struct NonAppliedEntry {
     entry: PushEntryRequest,
 }
 
-impl From<PushEntryRequest> for Entry {
+impl From<PushEntryRequest> for EntryWithConditionals {
     fn from(value: PushEntryRequest) -> Self {
         Self {
-            account_id: value.account_id,
-            entry_id: value.entry_id,
-            ledger_fields: value.ledger_fields,
-            additional_fields: value.additional_fields.unwrap_or(Value::Null),
-            status: EntryStatus::Applied,
+            entry: Entry {
+                account_id: value.account_id,
+                entry_id: value.entry_id,
+                ledger_fields: value.ledger_fields,
+                additional_fields: value.additional_fields.unwrap_or(Value::Null),
+                status: EntryStatus::Applied,
+            },
+            conditionals: value.conditionals.unwrap_or_default(),
         }
     }
 }
@@ -76,6 +79,7 @@ impl From<Entry> for PushEntryRequest {
             entry_id: value.entry_id,
             ledger_fields: value.ledger_fields,
             additional_fields: Some(value.additional_fields),
+            conditionals: None,
         }
     }
 }

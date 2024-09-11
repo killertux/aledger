@@ -1,10 +1,10 @@
 use anyhow::Result;
 use aws_sdk_dynamodb::{
-    Client,
     types::{
         AttributeDefinition, GlobalSecondaryIndex, KeySchemaElement, KeyType, Projection,
         ProjectionType, ProvisionedThroughput, ScalarAttributeType,
     },
+    Client,
 };
 
 pub mod ledger_entry_repository;

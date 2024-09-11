@@ -33,6 +33,7 @@ pub enum NonAppliedReason {
     OptimisticLockFailed,
     EntriesAlreadyExists,
     EntriesDoesNotExists,
+    ConditionFailed,
     Other(String),
 }
 
@@ -42,6 +43,7 @@ impl NonAppliedReason {
         match error {
             AppendEntriesError::OptimisticLockError(_) => Self::OptimisticLockFailed,
             AppendEntriesError::EntriesAlreadyExists(_, _) => Self::EntriesAlreadyExists,
+            AppendEntriesError::ConditionFailed(_, _) => Self::ConditionFailed,
             AppendEntriesError::Other(err) => Self::Other(err.to_string()),
         }
     }
@@ -62,6 +64,7 @@ impl NonAppliedReason {
             Self::EntriesDoesNotExists => {
                 "Entry does not exist or reverted for this account".into()
             }
+            Self::ConditionFailed => "Condition failed for this entry".into(),
             Self::Other(err) => format!("Other unexpected error: {err}"),
         }
     }
@@ -71,6 +74,7 @@ impl NonAppliedReason {
             Self::OptimisticLockFailed => 100,
             Self::EntriesAlreadyExists => 200,
             Self::EntriesDoesNotExists => 300,
+            Self::ConditionFailed => 400,
             Self::Other(_) => 900,
         }
     }

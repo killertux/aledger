@@ -1,9 +1,9 @@
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
-use crate::domain::entity::{Entry, EntryId, EntryWithBalance};
-use crate::domain::entity::AccountId;
 use crate::domain::entity::Cursor;
+use crate::domain::entity::{AccountId, Conditional, EntryWithConditionals};
+use crate::domain::entity::{EntryId, EntryWithBalance};
 
 use super::entity::EntryToContinue;
 use super::entity::Order;
@@ -12,7 +12,7 @@ pub trait LedgerEntryRepository {
     async fn append_entries(
         &self,
         account_id: &AccountId,
-        entries: &[Entry],
+        entries: &[EntryWithConditionals],
     ) -> Result<Vec<EntryWithBalance>, AppendEntriesError>;
 
     async fn revert_entries(
@@ -51,6 +51,8 @@ pub enum AppendEntriesError {
     OptimisticLockError(AccountId),
     #[error("Entries `{1:?}` already exists in account `{0:?}`")]
     EntriesAlreadyExists(AccountId, Vec<EntryId>),
+    #[error("Fail processing conditions for entry `{0:?}: `{1:?}`")]
+    ConditionFailed(EntryId, Conditional),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }

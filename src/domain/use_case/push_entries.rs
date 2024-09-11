@@ -4,7 +4,7 @@ use itertools::Itertools;
 use rand::Rng;
 use tokio::time::sleep;
 
-use crate::domain::entity::{Entry, EntryWithBalance};
+use crate::domain::entity::{Entry, EntryWithBalance, EntryWithConditionals};
 use crate::domain::gateway::{AppendEntriesError, LedgerEntryRepository};
 use crate::domain::use_case;
 use crate::domain::use_case::NonAppliedReason;
@@ -12,9 +12,9 @@ use crate::domain::use_case::NonAppliedReason;
 pub async fn push_entries_use_case(
     repository: &impl LedgerEntryRepository,
     mut random_number_generator: impl Rng,
-    entries: impl Iterator<Item = Entry> + Send + Sync,
+    entries: impl Iterator<Item = EntryWithConditionals> + Send + Sync,
 ) -> (Vec<EntryWithBalance>, Vec<(NonAppliedReason, Entry)>) {
-    let entries_by_account_id = entries.into_group_map_by(|v| v.account_id.clone());
+    let entries_by_account_id = entries.into_group_map_by(|v| v.entry.account_id.clone());
     let mut applied_entries_with_balance = Vec::new();
     let mut non_applied_entries = Vec::new();
 
@@ -40,17 +40,30 @@ pub async fn push_entries_use_case(
                     }
                     Err(AppendEntriesError::EntriesAlreadyExists(_, duplicated_entries_ids)) => {
                         let duplicated_entries = use_case::extract_if(&mut entries, |entry| {
-                            duplicated_entries_ids.contains(&entry.entry_id)
+                            duplicated_entries_ids.contains(&entry.entry.entry_id)
                         });
                         non_applied_entries.extend(
                             duplicated_entries
                                 .into_iter()
-                                .map(|entry| (NonAppliedReason::EntriesAlreadyExists, entry)),
+                                .map(|entry| (NonAppliedReason::EntriesAlreadyExists, entry.entry)),
+                        );
+                    }
+                    Err(AppendEntriesError::ConditionFailed(entry_id, _conditional)) => {
+                        let entry = use_case::extract_if(&mut entries, |entry| {
+                            entry.entry.entry_id == entry_id
+                        });
+                        non_applied_entries.extend(
+                            entry
+                                .into_iter()
+                                .map(|entry| (NonAppliedReason::ConditionFailed, entry.entry)),
                         );
                     }
                     Err(err) => {
                         non_applied_entries.extend(entries.into_iter().map(|entry| {
-                            (NonAppliedReason::from_append_entries_error(&err), entry)
+                            (
+                                NonAppliedReason::from_append_entries_error(&err),
+                                entry.entry,
+                            )
                         }));
                         break;
                     }
@@ -70,17 +83,17 @@ pub mod test {
     use chrono::Utc;
     use fake::{Fake, Faker};
 
+    use super::*;
+    use crate::domain::entity::LedgerBalanceName;
+    use crate::utils::test::set_now;
+    use crate::utils::utc_now;
     use crate::{
         app::test::{get_repository, get_rng},
         domain::entity::{
-            {EntryBuilder, EntryWithBalanceBuilder}, AccountId,
+            AccountId, {Conditional, EntryBuilder, EntryWithBalanceBuilder},
         },
         gateway::ledger_entry_repository::test::LedgerEntryRepositoryForTests,
     };
-    use crate::utils::test::set_now;
-    use crate::utils::utc_now;
-
-    use super::*;
 
     #[tokio_shared_rt::test(shared)]
     async fn push_single_entry() -> Result<()> {
@@ -94,7 +107,7 @@ pub mod test {
             .build();
 
         let (applied, non_applied) =
-            push_entries_use_case(&repository, rng, [entry.clone()].into_iter()).await;
+            push_entries_use_case(&repository, rng, [entry.clone().into()].into_iter()).await;
         assert!(non_applied.is_empty());
         assert_eq!(
             Vec::from([EntryWithBalanceBuilder::from_entry(entry)
@@ -124,7 +137,7 @@ pub mod test {
         let (applied, non_applied) = push_entries_use_case(
             &repository,
             rng,
-            [entry_1.clone(), entry_2.clone()].into_iter(),
+            [entry_1.clone().into(), entry_2.clone().into()].into_iter(),
         )
         .await;
         assert!(non_applied.is_empty());
@@ -176,10 +189,10 @@ pub mod test {
             &repository,
             rng,
             [
-                entry_1.clone(),
-                entry_2.clone(),
-                entry_3.clone(),
-                entry_4.clone(),
+                entry_1.clone().into(),
+                entry_2.clone().into(),
+                entry_3.clone().into(),
+                entry_4.clone().into(),
             ]
             .into_iter(),
         )
@@ -238,7 +251,12 @@ pub mod test {
         let (applied, non_applied) = push_entries_use_case(
             &repository,
             rng,
-            [entry_2.clone(), entry_1.clone(), entry_2.clone()].into_iter(),
+            [
+                entry_2.clone().into(),
+                entry_1.clone().into(),
+                entry_2.clone().into(),
+            ]
+            .into_iter(),
         )
         .await;
         assert_eq!(
@@ -277,13 +295,18 @@ pub mod test {
         let (applied_1, non_applied_1) = push_entries_use_case(
             &repository,
             get_rng().await,
-            [entry_1.clone(), entry_2.clone()].into_iter(),
+            [entry_1.clone().into(), entry_2.clone().into()].into_iter(),
         )
         .await;
         let (applied_2, non_applied_2) = push_entries_use_case(
             &repository,
             get_rng().await,
-            [entry_1.clone(), entry_2.clone(), entry_3.clone()].into_iter(),
+            [
+                entry_1.clone().into(),
+                entry_2.clone().into(),
+                entry_3.clone().into(),
+            ]
+            .into_iter(),
         )
         .await;
         assert!(non_applied_1.is_empty());
@@ -352,15 +375,90 @@ pub mod test {
             .with_ledger_field("local_amount", 100)
             .with_ledger_field("usd_amount", 301)
             .build();
-        let (applied, non_applied) =
-            push_entries_use_case(&repository, get_rng().await, [entry_1.clone()].into_iter())
-                .await;
+        let (applied, non_applied) = push_entries_use_case(
+            &repository,
+            get_rng().await,
+            [entry_1.clone().into()].into_iter(),
+        )
+        .await;
         assert!(applied.is_empty());
         assert_eq!(
             Vec::from([(NonAppliedReason::OptimisticLockFailed, entry_1),]),
             non_applied
         );
         assert_eq!(5, repository.get_append_entries_call_count().await);
+        Ok(())
+    }
+
+    #[tokio_shared_rt::test(shared)]
+    pub async fn push_entries_with_conditional() -> Result<()> {
+        let repository = get_repository().await;
+        let account_id: AccountId = Faker.fake();
+        let entry_1 = EntryBuilder::new()
+            .with_account_id(account_id.clone())
+            .with_ledger_field("local_amount", -1)
+            .with_ledger_field("usd_amount", -1)
+            .build();
+        let entry_2 = EntryBuilder::new()
+            .with_account_id(account_id.clone())
+            .with_ledger_field("local_amount", 0)
+            .with_ledger_field("usd_amount", 0)
+            .build();
+        let entry_3 = EntryBuilder::new()
+            .with_account_id(account_id.clone())
+            .with_ledger_field("local_amount", -5)
+            .with_ledger_field("usd_amount", 0)
+            .build();
+
+        let (applied, non_applied) = push_entries_use_case(
+            &repository,
+            get_rng().await,
+            [
+                EntryWithConditionals {
+                    entry: entry_1.clone(),
+                    conditionals: vec![Conditional::GreaterThanOrEqualTo {
+                        balance: LedgerBalanceName::new("balance_usd_amount".into())?,
+                        value: 0,
+                    }],
+                },
+                EntryWithConditionals {
+                    entry: entry_2.clone(),
+                    conditionals: vec![Conditional::GreaterThanOrEqualTo {
+                        balance: LedgerBalanceName::new("balance_usd_amount".into())?,
+                        value: 0,
+                    }],
+                },
+                EntryWithConditionals {
+                    entry: entry_3.clone(),
+                    conditionals: vec![
+                        Conditional::GreaterThanOrEqualTo {
+                            balance: LedgerBalanceName::new("balance_local_amount".into())?,
+                            value: -4,
+                        },
+                        Conditional::GreaterThanOrEqualTo {
+                            balance: LedgerBalanceName::new("balance_usd_amount".into())?,
+                            value: 0,
+                        },
+                    ],
+                },
+            ]
+            .into_iter(),
+        )
+        .await;
+        assert_eq!(
+            Vec::from([
+                (NonAppliedReason::ConditionFailed, entry_1),
+                (NonAppliedReason::ConditionFailed, entry_3)
+            ]),
+            non_applied
+        );
+        assert_eq!(
+            Vec::from([EntryWithBalanceBuilder::from_entry(entry_2)
+                .with_ledger_balance("balance_local_amount", 0)
+                .with_ledger_balance("balance_usd_amount", 0)
+                .build()]),
+            applied
+        );
         Ok(())
     }
 
@@ -374,6 +472,7 @@ pub mod test {
                 .with_account_id(account_id.clone())
                 .with_ledger_field("amount", Faker.fake::<i64>() as i128)
                 .build()
+                .into()
         });
         let (applied, non_applied) =
             push_entries_use_case(repository, get_rng().await, entries.into_iter()).await;

@@ -1,15 +1,14 @@
-use axum::{debug_handler, extract::State, Json};
+use axum::{extract::State, Json};
 use serde::Serialize;
 
+use crate::domain::use_case::delete_entries_use_case;
 use crate::{
     app::AppState, domain::entity::DeleteEntryRequest,
     gateway::ledger_entry_repository::DynamoDbLedgerEntryRepository,
 };
-use crate::domain::use_case::delete_entries_use_case;
 
 use super::LedgerResponse;
 
-#[debug_handler]
 pub async fn delete_entries(
     State(app_state): State<AppState>,
     Json(delete_entries): Json<Vec<DeleteEntryRequest>>,

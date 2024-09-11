@@ -102,3 +102,36 @@ Even though there is no hard limit on the number of entries that can be sent in 
 Also, the order of the entries in the request might not be preserved. The system will group the orders by account_id and then apply them.
 
 If there are failures, the system will still try to apply the other entries. If you want a transaction behaviour and consistent ordering than check the [transaction endpoint](./transaction.md).
+
+## Conditions
+
+You can define conditions to apply the entries. For now the only condition that can be passed is that one balance_field is greater or equal to a value after the entry being applied. Here is an example of a request with conditions:
+
+```
+POST 127.0.0.1:3001/api/v1/balance
+Content-Type: application/json
+
+[
+  {
+    "account_id": "f5700a39-8f31-4a1f-8bd5-3b35ccc61568",
+    "entry_id": "d5348939-d402-4deb-a0d1-eba6199b5877",
+    "ledger_fields": {
+      "local_amount": -1,
+      "usd_amount": -1
+    },
+    "additional_fields": {
+      "description": "Transfer",
+      "local_currency": "BRL",
+      "fx_rate": 5.01
+    },
+    "conditionals": [
+      {
+        "greater_than_or_equal_to": {
+          "balance": "balance_usd_amount",
+          "value": 0
+       }
+      }
+    ]
+  }
+]
+```

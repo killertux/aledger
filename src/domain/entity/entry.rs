@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::domain::entity::conditional::Conditional;
 use crate::domain::entity::{AccountId, LedgerBalanceName, LedgerFieldName};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Ord, PartialOrd, Eq, Hash, Clone)]
@@ -49,6 +50,30 @@ pub struct Entry {
     pub ledger_fields: HashMap<LedgerFieldName, i128>,
     pub additional_fields: Value,
     pub status: EntryStatus,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct EntryWithConditionals {
+    pub entry: Entry,
+    pub conditionals: Vec<Conditional>,
+}
+
+impl From<Entry> for EntryWithConditionals {
+    fn from(value: Entry) -> Self {
+        Self {
+            entry: value,
+            conditionals: vec![],
+        }
+    }
+}
+
+impl From<EntryWithBalance> for EntryWithConditionals {
+    fn from(value: EntryWithBalance) -> Self {
+        Self {
+            entry: value.into(),
+            conditionals: vec![],
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
